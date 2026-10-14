@@ -99,7 +99,7 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 	if result == nil || len(result.passages) == 0 {
 		slog.Info("ask no results", "latency_ms", latency.Milliseconds())
 		slog.Debug("ask no results query", "query", req.Query)
-		sw.sendJSON("error", map[string]string{"message": "この質問に答える情報はドキュメントに含まれていません。"})
+		sw.sendJSON("error", map[string]string{"message": "The documents do not contain information to answer this question."})
 		sw.sendJSON("done", struct{}{})
 		return
 	}
