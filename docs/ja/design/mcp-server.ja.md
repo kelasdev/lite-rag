@@ -16,7 +16,7 @@ lite-rag の RAG パイプラインを **MCP (Model Context Protocol) サーバ�
 
 **対象**
 - 新規 cobra サブコマンド `lite-rag mcp`（stdio トランスポート）
-- 3 つのツール: `search_docs`、`rag_context`、`list_documents`
+- 4 つのツール: `search_docs`、`rag_context`、`list_documents`、`index_documents`
 - `cmd/lite-rag/ask.go` から共通 ask/search パイプラインを `internal/rag` へ抽出
 - Hermes クライアント登録手順のドキュメント化
 
@@ -40,7 +40,8 @@ lite-rag の RAG パイプラインを **MCP (Model Context Protocol) サーバ�
         │                                            │    (go-sdk: mcp.Server)
         │                                            │      ├─ search_docs
         │                                            │      ├─ rag_context
-        │                                            │      └─ list_documents
+        │                                            │      ├─ list_documents
+        │                                            │      └─ index_documents
         │                                            │            │
         │                                            │    internal/rag/  (Engine)
         │                                            │      ├─ database/   (DuckDB)
@@ -113,8 +114,8 @@ Engine はリクエストごとの可変状態を持たない — `retriever` �
 
 ### 4.3 `internal/mcpserver` — ツール登録
 
-- `New(engine *rag.Engine) *mcp.Server` — SDK の総称関数 `mcp.AddTool` で
-  型付きハンドラとして 3 ツールを登録
+- `New(engine *rag.Engine, ingester Ingester) *mcp.Server` — SDK の総称関数 `mcp.AddTool` で
+  型付きハンドラとして 4 ツールを登録
 - ツールの `Description` に §5 の利用ガイダンスを記載（エージェント向け
   「いつ使うか」の契約）
 - 入出力 struct は `json` + `jsonschema` タグを使用。スキーマは SDK が推論
@@ -128,6 +129,7 @@ Engine はリクエストごとの可変状態を持たない — `retriever` �
 | `search_docs` | `query string`、`top_k int?` | `{passages:[{content, file_path, heading_path, score}]}` | なし | インデックス済み Markdown の意味検索。ファイルパス・見出しパス・スコア付きの生パッセージを返す。情報の所在確認や、自分で読んで合成する場合に使用。 |
 | `rag_context` | `question string` | `{answer, sources:[{file_path, heading_path, score}]}` | あり（バッファ） | 質問に対しドキュメント内容のみから生成された完成回答と引用ソースを返す。出来合いの根拠付き回答が欲しい場合に使用。無関係な文脈の場合は「The documents do not contain information to answer this question.」（質問の言語に翻訳）を返す — エラーではない。関連はあるが間接的な文脈は要約し、不足情報を注記する。 |
 | `list_documents` | — | `{documents:[{path, chunks, indexed_at, embedding_model}]}` | なし | インデックス済みドキュメントの一覧。検索前にナレッジベースの範囲確認や「何が登録されているか」の回答に使用。 |
+| `index_documents` | `path string` | `{path, documents_total, documents_added}` | なし（embed のみ） | ディレクトリ（`*.md` 再帰、変更なしファイルはスキップ）または単一ファイルをナレッジベースに登録。ドキュメント追加・変更後に `search_docs` / `rag_context` で見つかるようにする場合に使用。`documents_added` は新規ファイル数。更新ファイルはその場で更新され 0 と表示される。新規チャンクごとに embed API を呼ぶため、大規模ディレクトリでは時間がかかることがある。 |
 
 ---
 
@@ -142,6 +144,11 @@ Engine はリクエストごとの可変状態を持たない — `retriever` �
 
 **`list_documents`** — `Engine.ListDocuments` → `db.ListDocuments()` → JSON 結果。
 
+**`index_documents`** — `path` → `Ingester.IndexPath`（`internal/indexer`
+のアダプタ、ファイル/ディレクトリを自動判定）→ `db.ListDocuments()` の
+前後カウント → JSON 結果。MCP プロセス内で実行され、同一の DuckDB
+接続を共有するため、ツール呼出とのロック競合は発生しない。
+
 ---
 
 ## 7. エラーハンドリング
@@ -149,6 +156,8 @@ Engine はリクエストごとの可変状態を持たない — `retriever` �
 - ツール失敗（DB エラー、LLM エラー）→ Go の error として返却 → SDK が
   `IsError` 付き `CallToolResult` に変換
 - `search_docs` で 0 件 → **空のパッセージリスト**。エラーではない
+- `index_documents` で空パスまたは存在しないパス → Go の error →
+  元エラーメッセージを含む `IsError` 結果
 - `rag_context` でパッセージなし → 定型文「No relevant documents found in
   the indexed documents.」+ 空の `sources`。**LLM は呼ばれない**
   （engine は nil パッセージを返し `Ask` はチャット呼出をスキップする）。
@@ -192,7 +201,7 @@ MCP `tools/call` は単一のリクエスト/レスポンスであり、部分�
 **エンドツーエンド（`cmd/lite-rag/mcp_e2e_test.go`）**
 - 一時 DuckDB + ローカルの偽 LLM HTTP サーバー（OpenAI 互換 SSE）
 - SDK の `CommandTransport` で実バイナリ `lite-rag mcp` を起動
-- `initialize` → `tools/list` → `tools/call` のハンドシェイクを 3 ツール全てで検証
+- `initialize` → `tools/list` → `tools/call` のハンドシェイクを 4 ツール全てで検証
 
 **回帰**
 - `internal/rag` 抽出後も既存の CLI `ask` テストは green を維持する

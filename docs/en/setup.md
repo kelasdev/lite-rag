@@ -84,13 +84,14 @@ lite-rag mcp --web --web-addr :8080     # or override the listen address
 ```
 
 The server speaks JSON-RPC 2.0 over stdin/stdout (the stdio transport); all
-diagnostics go to stderr. It exposes three tools:
+diagnostics go to stderr. It exposes four tools:
 
 | Tool | Purpose |
 |------|---------|
 | `search_docs` | Semantic search returning raw passages (content, file path, heading path, score) — no LLM call |
 | `rag_context` | Full Q&A: document-grounded answer plus cited sources |
 | `list_documents` | List indexed documents (path, chunks, indexed timestamp, embedding model) |
+| `index_documents` | Index a directory (recursive `*.md`) or single file — for adding or updating documents without the CLI |
 
 ### Registering with an MCP client
 

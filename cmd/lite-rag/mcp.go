@@ -7,6 +7,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -19,6 +20,7 @@ import (
 
 	"lite-rag/internal/config"
 	"lite-rag/internal/database"
+	"lite-rag/internal/indexer"
 	"lite-rag/internal/llm"
 	"lite-rag/internal/mcpserver"
 	"lite-rag/internal/rag"
@@ -35,8 +37,8 @@ var mcpCmd = &cobra.Command{
 	Short: "Run as an MCP server (stdio transport) for agent clients",
 	Long: "Run lite-rag as a Model Context Protocol server. Communicates over " +
 		"stdin/stdout (JSON-RPC 2.0); all diagnostics go to stderr. " +
-		"Exposes three tools: search_docs, rag_context, list_documents. " +
-		"With --web, the Web UI is served from the same process.",
+		"Exposes four tools: search_docs, rag_context, list_documents, " +
+		"index_documents. With --web, the Web UI is served from the same process.",
 	RunE: runMCP,
 }
 
@@ -76,8 +78,29 @@ func runMCP(cmd *cobra.Command, args []string) error {
 	// stdout is the MCP protocol channel — never write progress there.
 	engine.Progress = io.Discard
 
-	server := mcpserver.New(engine)
+	// One adapter serves index_documents: dispatch file vs directory,
+	// mirroring the index command.
+	idx := &pathIndexer{indexer.New(db, client, cfg.Models.Embedding, cfg.Retrieval)}
+
+	server := mcpserver.New(engine, idx)
 	return server.Run(cmd.Context(), &mcp.StdioTransport{})
+}
+
+// pathIndexer adapts internal/indexer to mcpserver.Ingester: a single
+// entry point that stats the path and indexes a directory or one file.
+type pathIndexer struct {
+	idx *indexer.Indexer
+}
+
+func (p *pathIndexer) IndexPath(ctx context.Context, path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("path %s: %w", path, err)
+	}
+	if info.IsDir() {
+		return p.idx.IndexDir(ctx, path)
+	}
+	return p.idx.IndexFile(ctx, path)
 }
 
 // startWeb serves the Web UI in this process and returns once the listener

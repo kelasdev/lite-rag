@@ -6,15 +6,22 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"lite-rag/internal/rag"
 )
 
-// New builds an MCP server exposing search_docs, rag_context, and
-// list_documents over the engine's pipeline.
-func New(engine *rag.Engine) *mcp.Server {
+// Ingester indexes Markdown documents into the database. cmd/lite-rag/mcp.go
+// supplies an adapter over internal/indexer that dispatches file vs directory.
+type Ingester interface {
+	IndexPath(ctx context.Context, path string) error
+}
+
+// New builds an MCP server exposing search_docs, rag_context,
+// list_documents, and index_documents over the engine's pipeline.
+func New(engine *rag.Engine, ingester Ingester) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "lite-rag"}, nil)
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -41,6 +48,15 @@ func New(engine *rag.Engine) *mcp.Server {
 			"Use to check knowledge-base coverage before searching, or to answer what " +
 			"is indexed.",
 	}, listDocuments(engine))
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "index_documents",
+		Description: "Index Markdown documents into the knowledge base. Pass a directory " +
+			"(recursively indexes *.md, skipping unchanged files) or a single file path. " +
+			"Use after adding or changing documents so search_docs / rag_context can " +
+			"find them. Calls the embedding API for every new chunk — on large " +
+			"directories this can take a while.",
+	}, indexDocuments(engine, ingester))
 
 	return server
 }
@@ -155,6 +171,45 @@ func listDocuments(engine *rag.Engine) func(context.Context, *mcp.CallToolReques
 				IndexedAt:      d.IndexedAt,
 				EmbeddingModel: d.EmbeddingModel,
 			})
+		}
+		return textResult(out)
+	}
+}
+
+// ── index_documents ─────────────────────────────────────────────────────────
+
+type indexIn struct {
+	Path string `json:"path" jsonschema:"directory to index recursively (*.md) or a single Markdown file path"`
+}
+
+type indexOut struct {
+	Path           string `json:"path"`
+	DocumentsTotal int    `json:"documents_total"`
+	// DocumentsAdded counts newly-indexed files; re-indexing an updated
+	// file refreshes it in place and shows as 0 added.
+	DocumentsAdded int `json:"documents_added"`
+}
+
+func indexDocuments(engine *rag.Engine, ingester Ingester) func(context.Context, *mcp.CallToolRequest, indexIn) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in indexIn) (*mcp.CallToolResult, any, error) {
+		if strings.TrimSpace(in.Path) == "" {
+			return nil, nil, fmt.Errorf("index_documents: path is required")
+		}
+		before, err := engine.ListDocuments()
+		if err != nil {
+			return nil, nil, fmt.Errorf("index_documents: %w", err)
+		}
+		if err := ingester.IndexPath(ctx, in.Path); err != nil {
+			return nil, nil, fmt.Errorf("index_documents: %w", err)
+		}
+		after, err := engine.ListDocuments()
+		if err != nil {
+			return nil, nil, fmt.Errorf("index_documents: %w", err)
+		}
+		out := indexOut{
+			Path:           in.Path,
+			DocumentsTotal: len(after),
+			DocumentsAdded: len(after) - len(before),
 		}
 		return textResult(out)
 	}

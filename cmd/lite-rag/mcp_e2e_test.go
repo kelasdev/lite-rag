@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -75,9 +76,9 @@ func TestMCPCmd_E2E(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	sort.Strings(names)
-	want := "list_documents,rag_context,search_docs"
+	want := "index_documents,list_documents,rag_context,search_docs"
 	if strings.Join(names, ",") != want {
-		t.Errorf("want tools %s, got %v", want, names)
+		t.Fatalf("want tools %s, got %s", want, strings.Join(names, ","))
 	}
 
 	// search_docs: the indexed content must come back.
@@ -123,6 +124,89 @@ func TestMCPCmd_E2E(t *testing.T) {
 	}
 	if !strings.Contains(e2eText(t, res), "doc.md") {
 		t.Errorf("list_documents must list doc.md, got: %s", e2eText(t, res))
+	}
+}
+
+// TestMCPCmd_E2E_Ingest exercises the real indexer adapter through MCP:
+// index_documents over stdio must make the document listable and
+// searchable in the same process (one DB connection, no lock conflict).
+func TestMCPCmd_E2E_Ingest(t *testing.T) {
+	srv := mockLLM(t)
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	cfg := writeCfg(t, dir, srv.URL, dbPath)
+
+	docDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(docDir, "ingested.md"),
+		[]byte("# Widgets\n\nWidgets are small gadgets.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "e2e-client"}, nil)
+	transport := &mcp.CommandTransport{
+		Command: exec.Command(e2eBinary, "--config", cfg, "mcp"),
+	}
+	ctx := context.Background()
+	session, err := client.Connect(ctx, transport, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer session.Close()
+
+	// index_documents: directory dispatch through the real adapter.
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "index_documents",
+		Arguments: map[string]any{"path": docDir},
+	})
+	if err != nil {
+		t.Fatalf("index_documents: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("index_documents error: %s", e2eText(t, res))
+	}
+	var idxOut struct {
+		DocumentsAdded int `json:"documents_added"`
+	}
+	if err := json.Unmarshal([]byte(e2eText(t, res)), &idxOut); err != nil {
+		t.Fatalf("unmarshal index result: %v (raw: %s)", err, e2eText(t, res))
+	}
+	if idxOut.DocumentsAdded != 1 {
+		t.Errorf("documents_added = %d, want 1", idxOut.DocumentsAdded)
+	}
+
+	// The document must now be listed and findable.
+	res, err = session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "list_documents",
+		Arguments: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("list_documents: %v", err)
+	}
+	if !strings.Contains(e2eText(t, res), "ingested.md") {
+		t.Errorf("list_documents must list ingested.md, got: %s", e2eText(t, res))
+	}
+
+	res, err = session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "search_docs",
+		Arguments: map[string]any{"query": "widgets"},
+	})
+	if err != nil {
+		t.Fatalf("search_docs: %v", err)
+	}
+	if !strings.Contains(e2eText(t, res), "Widgets are small gadgets") {
+		t.Errorf("search_docs must find the ingested content, got: %s", e2eText(t, res))
+	}
+
+	// A nonexistent path surfaces as an IsError result, not a crash.
+	res, err = session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "index_documents",
+		Arguments: map[string]any{"path": filepath.Join(docDir, "does-not-exist")},
+	})
+	if err != nil {
+		t.Fatalf("index_documents (missing path): %v", err)
+	}
+	if !res.IsError {
+		t.Errorf("missing path must be an error result, got: %s", e2eText(t, res))
 	}
 }
 

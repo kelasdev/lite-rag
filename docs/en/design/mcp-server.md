@@ -39,7 +39,8 @@ The server runs as a subcommand (`lite-rag mcp`) over the **stdio transport** (J
         │                                            │    (go-sdk: mcp.Server)
         │                                            │      ├─ search_docs
         │                                            │      ├─ rag_context
-        │                                            │      └─ list_documents
+        │                                            │      ├─ list_documents
+        │                                            │      └─ index_documents
         │                                            │            │
         │                                            │    internal/rag/  (Engine)
         │                                            │      ├─ database/   (DuckDB)
@@ -112,7 +113,8 @@ mode, buffering in `--json` mode, identical source output).
 
 ### 4.3 `internal/mcpserver` — tool registration
 
-- `New(engine *rag.Engine) *mcp.Server` — registers the three tools via the
+- `New(engine *rag.Engine, ingester Ingester) *mcp.Server` — registers the
+  four tools via the
   SDK's generic `mcp.AddTool` with typed input/output structs
 - Tool `Description` fields carry the usage guidance in §5 (the agent-visible
   "when to use this" contract)
@@ -127,6 +129,7 @@ mode, buffering in `--json` mode, identical source output).
 | `search_docs` | `query string`, `top_k int?` | `{passages:[{content, file_path, heading_path, score}]}` | No | Semantic search over indexed Markdown. Returns raw relevant passages with file path, heading path, score. Use to locate where information lives or to read and synthesize source text yourself. |
 | `rag_context` | `question string` | `{answer, sources:[{file_path, heading_path, score}]}` | Yes (buffered) | Ask a question and receive a complete answer generated strictly from document content, plus cited sources. Use for a ready-made grounded answer. Unrelated context returns a "documents do not contain information to answer this question" message (in the question's language) — not an error; related-but-indirect context is summarized with the gap noted. |
 | `list_documents` | — | `{documents:[{path, chunks, indexed_at, embedding_model}]}` | No | List indexed documents. Use to check knowledge-base coverage before searching, or to answer what is indexed. |
+| `index_documents` | `path string` | `{path, documents_total, documents_added}` | No (embed only) | Index a directory (recursive `*.md`, unchanged files skipped) or a single file into the knowledge base. Use after adding or changing documents so `search_docs` / `rag_context` can find them. `documents_added` counts new files; updated files refresh in place and show 0. Calls the embedding API per new chunk — can take a while on large directories. |
 
 ---
 
@@ -141,6 +144,11 @@ nonce-tagged context block → `client.Chat` (SSE to the LLM endpoint, buffered)
 
 **`list_documents`** — `Engine.ListDocuments` → `db.ListDocuments()` → JSON result.
 
+**`index_documents`** — `path` → `Ingester.IndexPath` (adapter over
+`internal/indexer`, dispatches file vs directory) → before/after
+`db.ListDocuments()` count → JSON result. Runs in the MCP process, sharing
+its single DuckDB connection — no lock conflict with concurrent tool calls.
+
 ---
 
 ## 7. Error Handling
@@ -148,6 +156,8 @@ nonce-tagged context block → `client.Chat` (SSE to the LLM endpoint, buffered)
 - Tool failures (DB error, LLM error) → returned as Go errors → the SDK converts
   them to `CallToolResult` with `IsError` and the message
 - `search_docs` with no hits → **empty passages list**, not an error
+- `index_documents` with an empty path or a path that does not exist → Go
+  error → `IsError` result carrying the underlying message
 - `rag_context` with no passages → a canned "No relevant documents found in
   the indexed documents." message with empty `sources`, **without calling the
   LLM** (the engine returns nil passages and `Ask` skips the chat call). The
@@ -191,7 +201,7 @@ Both documented in `docs/en/dependencies.md` per RULES.md Rule 18.
 **End-to-end (`cmd/lite-rag/mcp_e2e_test.go`)**
 - Temp DuckDB + local fake LLM HTTP server (OpenAI-compatible SSE)
 - Spawn the real `lite-rag mcp` binary via the SDK's `CommandTransport`
-- Handshake `initialize` → `tools/list` → `tools/call` for all three tools
+- Handshake `initialize` → `tools/list` → `tools/call` for all four tools
 
 **Regression**
 - Existing CLI `ask` tests must stay green after the `internal/rag` extraction

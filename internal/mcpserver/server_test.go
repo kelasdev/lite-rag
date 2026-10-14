@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -45,6 +46,31 @@ func (f *fakeDB) ListDocuments() ([]database.DocumentRecord, error) {
 	return f.documents, nil
 }
 
+// fakeIngester stands in for the internal/indexer adapter. When db is set,
+// a successful IndexPath appends one document record so the before/after
+// count logic in the handler is exercised.
+type fakeIngester struct {
+	err   error
+	paths []string
+	db    *fakeDB
+}
+
+func (f *fakeIngester) IndexPath(ctx context.Context, path string) error {
+	f.paths = append(f.paths, path)
+	if f.err != nil {
+		return f.err
+	}
+	if f.db != nil {
+		f.db.documents = append(f.db.documents, database.DocumentRecord{
+			FilePath:       path,
+			TotalChunks:    1,
+			IndexedAt:      time.Now().UTC().Format(time.RFC3339),
+			EmbeddingModel: "test-embed",
+		})
+	}
+	return nil
+}
+
 type fakeLLM struct {
 	chatAnswer  string
 	judgeAnswer string
@@ -74,6 +100,11 @@ func (f *fakeLLM) RewriteQuery(ctx context.Context, query string) ([]string, err
 // newTestServer wires an in-process client+server over in-memory transports.
 func newTestServer(t *testing.T, db rag.DocDB, client rag.LLM) *mcp.ClientSession {
 	t.Helper()
+	return newTestServerWithIngester(t, db, client, &fakeIngester{})
+}
+
+func newTestServerWithIngester(t *testing.T, db rag.DocDB, client rag.LLM, ing Ingester) *mcp.ClientSession {
+	t.Helper()
 	cfg := &config.Config{}
 	cfg.Retrieval.TopK = 3
 	cfg.Retrieval.ContextWindow = 1
@@ -81,7 +112,7 @@ func newTestServer(t *testing.T, db rag.DocDB, client rag.LLM) *mcp.ClientSessio
 	engine := rag.NewEngine(db, client, cfg)
 	engine.Progress = nil // treated as io.Discard
 
-	server := New(engine)
+	server := New(engine, ing)
 	clientSide := mcp.NewClient(&mcp.Implementation{Name: "test-client"}, nil)
 	ct, st := mcp.NewInMemoryTransports()
 	if _, err := server.Connect(context.Background(), st, nil); err != nil {
@@ -128,7 +159,7 @@ func TestToolsListed(t *testing.T) {
 		}
 		names = append(names, tool.Name)
 	}
-	want := []string{"list_documents", "rag_context", "search_docs"}
+	want := []string{"index_documents", "list_documents", "rag_context", "search_docs"}
 	if len(names) != len(want) {
 		t.Fatalf("want %d tools, got %d (%v)", len(want), len(names), names)
 	}
@@ -142,6 +173,83 @@ func TestToolsListed(t *testing.T) {
 		if !found {
 			t.Errorf("tool %q not advertised (got %v)", w, names)
 		}
+	}
+}
+
+// ── index_documents ─────────────────────────────────────────────────────────
+
+// TestIndexDocuments_Directory: the ingester receives the path verbatim and
+// the result reports the document-count delta (documents_added).
+func TestIndexDocuments_Directory(t *testing.T) {
+	db := indexedDB()
+	ing := &fakeIngester{db: db}
+	session := newTestServerWithIngester(t, db, &fakeLLM{}, ing)
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "index_documents",
+		Arguments: map[string]any{"path": "/tmp/docs"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %s", toolText(t, res))
+	}
+	if len(ing.paths) != 1 || ing.paths[0] != "/tmp/docs" {
+		t.Errorf("ingester paths = %v, want [/tmp/docs]", ing.paths)
+	}
+	var out struct {
+		Path            string `json:"path"`
+		DocumentsTotal  int    `json:"documents_total"`
+		DocumentsAdded  int    `json:"documents_added"`
+	}
+	if err := json.Unmarshal([]byte(toolText(t, res)), &out); err != nil {
+		t.Fatalf("unmarshal: %v (raw: %s)", err, toolText(t, res))
+	}
+	if out.Path != "/tmp/docs" {
+		t.Errorf("path = %q, want /tmp/docs", out.Path)
+	}
+	if out.DocumentsAdded != 1 || out.DocumentsTotal != 1 {
+		t.Errorf("documents_added = %d, documents_total = %d; want 1 and 1",
+			out.DocumentsAdded, out.DocumentsTotal)
+	}
+}
+
+// TestIndexDocuments_MissingPath: an empty path is a tool error, not a
+// silent no-op.
+func TestIndexDocuments_MissingPath(t *testing.T) {
+	session := newTestServer(t, indexedDB(), &fakeLLM{})
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "index_documents",
+		Arguments: map[string]any{"path": ""},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("empty path must be an error result, got: %s", toolText(t, res))
+	}
+	if !strings.Contains(toolText(t, res), "path is required") {
+		t.Errorf("error message = %q, want it to mention path is required", toolText(t, res))
+	}
+}
+
+// TestIndexDocuments_Error: an indexing failure surfaces as an IsError
+// result with the underlying message.
+func TestIndexDocuments_Error(t *testing.T) {
+	ing := &fakeIngester{err: errors.New("embed failed")}
+	session := newTestServerWithIngester(t, indexedDB(), &fakeLLM{}, ing)
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "index_documents",
+		Arguments: map[string]any{"path": "/tmp/docs"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("ingest failure must be an error result, got: %s", toolText(t, res))
+	}
+	if !strings.Contains(toolText(t, res), "embed failed") {
+		t.Errorf("error message = %q, want it to carry the underlying error", toolText(t, res))
 	}
 }
 
