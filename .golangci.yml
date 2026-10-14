@@ -1,0 +1,15 @@
+# golangci-lint v2 configuration.
+#
+# v2 enables no exclusion presets by default, while v1 applied the standard
+# exclusions (unchecked Close/Flush/print/... calls, common false positives,
+# comment style) automatically. The presets below restore that v1 default
+# behavior explicitly, keeping the lint gate unchanged across the upgrade.
+version: "2"
+
+linters:
+  exclusions:
+    presets:
+      - comments
+      - std-error-handling
+      - common-false-positives
+      - legacy

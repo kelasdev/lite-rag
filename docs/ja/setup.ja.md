@@ -4,7 +4,7 @@
 
 | ツール | バージョン | 用途 |
 |---|---|---|
-| Go | 1.26+ | ビルドツールチェーン |
+| Go | 1.26.9+ | ビルドツールチェーン |
 | make | 任意 | ビルド自動化 |
 | cc（clang/gcc） | 任意 | CGo コンパイル（go-duckdb 必須） |
 | podman または docker | 任意 | Linux クロスコンパイル（任意） |
@@ -55,6 +55,16 @@ make setup
 `scripts/hooks/pre-commit` と `scripts/hooks/pre-push` を `.git/hooks/` にコピーし、
 実行権限を付与します。両フックとも `make check`（lint + test + build）を実行し、
 失敗した場合はコミット・プッシュを拒否します。
+
+## リンティング
+
+`make lint` は [golangci-lint](https://golangci-lint.run) v2 を実行します。
+ツールは `make setup`（または初回 `make lint` 時）で `.go/bin/` にインストールされます。
+
+lint の挙動は `.golangci.yml` で固定しています。v2 はデフォルトで除外プリセットを
+有効にしないため、v1 が自動適用していたプリセット（`comments`、
+`std-error-handling`、`common-false-positives`、`legacy`）を明示的に有効にして
+います。アップグレード前後で lint ゲートの挙動は変わりません。
 
 ## 環境変数
 

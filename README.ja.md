@@ -23,7 +23,7 @@ OpenAI 互換 API（例：[LM Studio](https://lmstudio.ai/)）経由でローカ
 
 | ツール | バージョン | 用途 |
 |---|---|---|
-| Go | 1.26+ | ビルドツールチェーン |
+| Go | 1.26.9+ | ビルドツールチェーン |
 | make | 任意 | ビルド自動化 |
 | cc（clang/gcc） | 任意 | CGo コンパイル（go-duckdb 必須） |
 | LM Studio | 任意 | ローカル LLM 推論サーバー |

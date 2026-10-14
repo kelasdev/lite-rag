@@ -86,7 +86,7 @@ setup:
 	cp scripts/hooks/pre-push    .git/hooks/pre-push
 	chmod +x .git/hooks/pre-commit .git/hooks/pre-push
 	@echo "Installing golangci-lint..."
-	GOPATH=$(GOPATH) go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	GOPATH=$(GOPATH) GOTOOLCHAIN=go1.26.9 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 	@echo "Installing govulncheck..."
 	GOPATH=$(GOPATH) go install golang.org/x/vuln/cmd/govulncheck@latest
 	@echo "Setup complete."
@@ -278,9 +278,13 @@ clean:
 help:
 	@grep -E '^## ' Makefile | sed 's/## //'
 
-# Install tools if not present
+# Install tools if not present.
+# golangci-lint v2 lives on the /v2 module path; the v1 path still resolves
+# to v1.64.8, which is built with go1.24 and refuses to load against this
+# module's go 1.26.9. GOTOOLCHAIN pins the build to the go.mod toolchain so
+# the linter is never built with a lower language version than it targets.
 $(GOLANGCI):
-	GOPATH=$(GOPATH) go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	GOPATH=$(GOPATH) GOTOOLCHAIN=go1.26.9 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 
 $(GOVULNCHECK):
 	GOPATH=$(GOPATH) go install golang.org/x/vuln/cmd/govulncheck@latest

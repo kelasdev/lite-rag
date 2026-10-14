@@ -4,7 +4,7 @@
 
 | Tool | Version | Purpose |
 |---|---|---|
-| Go | 1.26+ | Build toolchain |
+| Go | 1.26.9+ | Build toolchain |
 | make | any | Build automation |
 | cc (clang/gcc) | any | CGo compilation (required by go-duckdb) |
 | podman or docker | any | Linux cross-compilation (optional) |
@@ -55,6 +55,16 @@ go install golang.org/x/vuln/cmd/govulncheck@latest
 # Run standalone
 make vuln
 ```
+
+## Linting
+
+`make lint` runs [golangci-lint](https://golangci-lint.run) v2. The tool is
+installed into `.go/bin/` by `make setup` (or on first `make lint`).
+
+Lint behavior is pinned by `.golangci.yml`. v2 enables no exclusion presets
+by default, so the file explicitly enables the presets v1 applied
+automatically (`comments`, `std-error-handling`, `common-false-positives`,
+`legacy`) — the lint gate behaves the same as before the upgrade.
 
 ## Git Hook Installation
 

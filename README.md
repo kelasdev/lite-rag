@@ -31,7 +31,7 @@ mixed-script token estimation.
 
 | Tool | Version | Purpose |
 |---|---|---|
-| Go | 1.26+ | Build toolchain |
+| Go | 1.26.9+ | Build toolchain |
 | make | any | Build automation |
 | cc (clang/gcc) | any | CGo (required by go-duckdb) |
 | LM Studio | any | Local LLM inference server |
