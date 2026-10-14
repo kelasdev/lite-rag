@@ -1,0 +1,338 @@
+package mcpserver
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"strings"
+	"testing"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"lite-rag/internal/config"
+	"lite-rag/internal/database"
+	"lite-rag/internal/llm"
+	"lite-rag/internal/rag"
+)
+
+// ── Fakes (mcpserver only sees rag.DocDB / rag.LLM) ─────────────────────────
+
+type fakeDB struct {
+	chunks    []database.ScoredChunk
+	adjacent  []database.ChunkRow
+	documents []database.DocumentRecord
+	lastTopK  int
+	simErr    error
+}
+
+func (f *fakeDB) SimilarChunks(query []float32, topK int, embeddingModel string) ([]database.ScoredChunk, error) {
+	f.lastTopK = topK
+	if f.simErr != nil {
+		return nil, f.simErr
+	}
+	if topK > len(f.chunks) {
+		topK = len(f.chunks)
+	}
+	return f.chunks[:topK], nil
+}
+
+func (f *fakeDB) AdjacentChunks(documentID string, lo, hi int) ([]database.ChunkRow, error) {
+	return f.adjacent, nil
+}
+
+func (f *fakeDB) ListDocuments() ([]database.DocumentRecord, error) {
+	return f.documents, nil
+}
+
+type fakeLLM struct {
+	chatAnswer string
+}
+
+func (f *fakeLLM) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+	out := make([][]float32, len(texts))
+	for i := range out {
+		out[i] = []float32{1, 0, 0, 0}
+	}
+	return out, nil
+}
+
+func (f *fakeLLM) Chat(ctx context.Context, messages []llm.Message, w io.Writer) error {
+	_, err := io.WriteString(w, f.chatAnswer)
+	return err
+}
+
+func (f *fakeLLM) RewriteQuery(ctx context.Context, query string) ([]string, error) {
+	return []string{query}, nil
+}
+
+// newTestServer wires an in-process client+server over in-memory transports.
+func newTestServer(t *testing.T, db rag.DocDB, client rag.LLM) *mcp.ClientSession {
+	t.Helper()
+	cfg := &config.Config{}
+	cfg.Retrieval.TopK = 3
+	cfg.Retrieval.ContextWindow = 1
+	cfg.Models.Embedding = "test-embed"
+	engine := rag.NewEngine(db, client, cfg)
+	engine.Progress = nil // treated as io.Discard
+
+	server := New(engine)
+	clientSide := mcp.NewClient(&mcp.Implementation{Name: "test-client"}, nil)
+	ct, st := mcp.NewInMemoryTransports()
+	if _, err := server.Connect(context.Background(), st, nil); err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	session, err := clientSide.Connect(context.Background(), ct, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+	return session
+}
+
+func toolText(t *testing.T, res *mcp.CallToolResult) string {
+	t.Helper()
+	if res == nil || len(res.Content) == 0 {
+		return ""
+	}
+	tc, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("unexpected content type %T", res.Content[0])
+	}
+	return tc.Text
+}
+
+func indexedDB() *fakeDB {
+	content := "the answer is 42"
+	return &fakeDB{
+		chunks: []database.ScoredChunk{
+			{ChunkRow: database.ChunkRow{ID: "c1", DocumentID: "d1", ChunkIndex: 0, Content: content}, Score: 0.95, FilePath: "docs/a.md"},
+		},
+		adjacent: []database.ChunkRow{{ChunkIndex: 0, Content: content}},
+	}
+}
+
+// ── tools/list ──────────────────────────────────────────────────────────────
+
+func TestToolsListed(t *testing.T) {
+	session := newTestServer(t, &fakeDB{}, &fakeLLM{})
+	var names []string
+	for tool, err := range session.Tools(context.Background(), nil) {
+		if err != nil {
+			t.Fatalf("list tools: %v", err)
+		}
+		names = append(names, tool.Name)
+	}
+	want := []string{"list_documents", "rag_context", "search_docs"}
+	if len(names) != len(want) {
+		t.Fatalf("want %d tools, got %d (%v)", len(want), len(names), names)
+	}
+	for _, w := range want {
+		found := false
+		for _, n := range names {
+			if n == w {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("tool %q not advertised (got %v)", w, names)
+		}
+	}
+}
+
+// ── search_docs ─────────────────────────────────────────────────────────────
+
+func TestSearchDocs(t *testing.T) {
+	session := newTestServer(t, indexedDB(), &fakeLLM{})
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "search_docs",
+		Arguments: map[string]any{"query": "what is the answer?"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %s", toolText(t, res))
+	}
+	var out struct {
+		Passages []struct {
+			Content  string  `json:"content"`
+			FilePath string  `json:"file_path"`
+			Score    float32 `json:"score"`
+		} `json:"passages"`
+	}
+	if err := json.Unmarshal([]byte(toolText(t, res)), &out); err != nil {
+		t.Fatalf("unmarshal: %v (raw: %s)", err, toolText(t, res))
+	}
+	if len(out.Passages) != 1 || out.Passages[0].FilePath != "docs/a.md" {
+		t.Fatalf("unexpected passages: %+v", out.Passages)
+	}
+	if !strings.Contains(out.Passages[0].Content, "the answer is 42") {
+		t.Errorf("passage content wrong: %q", out.Passages[0].Content)
+	}
+}
+
+func TestSearchDocs_TopKOverride(t *testing.T) {
+	db := indexedDB()
+	session := newTestServer(t, db, &fakeLLM{})
+	_, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "search_docs",
+		Arguments: map[string]any{"query": "q", "top_k": 1},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if db.lastTopK != 1 {
+		t.Errorf("want SimilarChunks called with topK 1, got %d", db.lastTopK)
+	}
+}
+
+func TestSearchDocs_EmptyIsNotError(t *testing.T) {
+	session := newTestServer(t, &fakeDB{}, &fakeLLM{})
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "search_docs",
+		Arguments: map[string]any{"query": "nothing matches"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("empty result must not be an error: %s", toolText(t, res))
+	}
+	var out struct {
+		Passages []any `json:"passages"`
+	}
+	if err := json.Unmarshal([]byte(toolText(t, res)), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(out.Passages) != 0 {
+		t.Errorf("want 0 passages, got %d", len(out.Passages))
+	}
+}
+
+// ── rag_context ─────────────────────────────────────────────────────────────
+
+func TestRagContext(t *testing.T) {
+	session := newTestServer(t, indexedDB(), &fakeLLM{chatAnswer: "The answer is 42."})
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "rag_context",
+		Arguments: map[string]any{"question": "what is the answer?"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %s", toolText(t, res))
+	}
+	var out struct {
+		Answer  string `json:"answer"`
+		Sources []struct {
+			FilePath string  `json:"file_path"`
+			Score    float32 `json:"score"`
+		} `json:"sources"`
+	}
+	if err := json.Unmarshal([]byte(toolText(t, res)), &out); err != nil {
+		t.Fatalf("unmarshal: %v (raw: %s)", err, toolText(t, res))
+	}
+	if out.Answer != "The answer is 42." {
+		t.Errorf("want answer %q, got %q", "The answer is 42.", out.Answer)
+	}
+	if len(out.Sources) != 1 || out.Sources[0].FilePath != "docs/a.md" {
+		t.Fatalf("unexpected sources: %+v", out.Sources)
+	}
+}
+
+func TestRagContext_NoDocuments(t *testing.T) {
+	session := newTestServer(t, &fakeDB{}, &fakeLLM{chatAnswer: "must not be called"})
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "rag_context",
+		Arguments: map[string]any{"question": "anything"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	var out struct {
+		Answer  string `json:"answer"`
+		Sources []any  `json:"sources"`
+	}
+	if err := json.Unmarshal([]byte(toolText(t, res)), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.Answer != "No relevant documents found in the indexed documents." {
+		t.Errorf("want explicit no-documents message, got %q", out.Answer)
+	}
+	if len(out.Sources) != 0 {
+		t.Errorf("want 0 sources, got %d", len(out.Sources))
+	}
+}
+
+func TestRagContext_UnicodeAnswer(t *testing.T) {
+	session := newTestServer(t, indexedDB(), &fakeLLM{chatAnswer: "日本語の回答です。"})
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "rag_context",
+		Arguments: map[string]any{"question": "質問"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	var out struct {
+		Answer string `json:"answer"`
+	}
+	if err := json.Unmarshal([]byte(toolText(t, res)), &out); err != nil {
+		t.Fatalf("unmarshal: %v (raw: %s)", err, toolText(t, res))
+	}
+	if out.Answer != "日本語の回答です。" {
+		t.Errorf("unicode answer mangled: %q", out.Answer)
+	}
+}
+
+// ── list_documents ──────────────────────────────────────────────────────────
+
+func TestListDocuments(t *testing.T) {
+	db := &fakeDB{documents: []database.DocumentRecord{
+		{FilePath: "docs/a.md", TotalChunks: 5, IndexedAt: "2026-10-14 10:00:00", EmbeddingModel: "test-embed"},
+	}}
+	session := newTestServer(t, db, &fakeLLM{})
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "list_documents",
+		Arguments: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	var out struct {
+		Documents []struct {
+			Path           string `json:"path"`
+			Chunks         int    `json:"chunks"`
+			IndexedAt      string `json:"indexed_at"`
+			EmbeddingModel string `json:"embedding_model"`
+		} `json:"documents"`
+	}
+	if err := json.Unmarshal([]byte(toolText(t, res)), &out); err != nil {
+		t.Fatalf("unmarshal: %v (raw: %s)", err, toolText(t, res))
+	}
+	if len(out.Documents) != 1 {
+		t.Fatalf("want 1 document, got %d", len(out.Documents))
+	}
+	d := out.Documents[0]
+	if d.Path != "docs/a.md" || d.Chunks != 5 || d.EmbeddingModel != "test-embed" {
+		t.Errorf("unexpected document: %+v", d)
+	}
+}
+
+// ── error surfacing ─────────────────────────────────────────────────────────
+
+func TestToolErrorIsSurfaced(t *testing.T) {
+	db := &fakeDB{simErr: errors.New("db down")}
+	session := newTestServer(t, db, &fakeLLM{})
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "search_docs",
+		Arguments: map[string]any{"query": "q"},
+	})
+	if err == nil && (res == nil || !res.IsError) {
+		t.Fatalf("want failure surfaced, got res=%+v err=%v", res, err)
+	}
+	if res != nil && !strings.Contains(toolText(t, res), "db down") {
+		t.Errorf("error message must contain the cause, got %q", toolText(t, res))
+	}
+}
