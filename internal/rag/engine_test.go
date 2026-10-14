@@ -300,3 +300,26 @@ func TestAsk_NonceTagsWrapContext(t *testing.T) {
 		t.Errorf("closing tag %q must appear exactly once, got %d", closeTag, n)
 	}
 }
+
+// TestBuildMessages_PromptRules pins the RAG answer-quality rules: the model
+// must answer in the question's language, must synthesize from related
+// context before bailing, and must emit the fallback alone (never appended
+// after a real answer — that produced contradictory "answer + Japanese
+// refusal" output).
+func TestBuildMessages_PromptRules(t *testing.T) {
+	passages := []retriever.Passage{{FilePath: "a.md", Content: "content about widgets", Score: 0.9}}
+	sys := buildMessages("apa itu jailbreak", passages)[0].Content
+
+	if !strings.Contains(sys, "same language as the user's question") {
+		t.Error("system prompt must instruct answering in the question's language")
+	}
+	if !strings.Contains(sys, "related information but no direct answer") {
+		t.Error("system prompt must instruct best-effort synthesis before the fallback")
+	}
+	if !strings.Contains(sys, "and nothing else") {
+		t.Error("fallback rule must forbid appending it after an answer")
+	}
+	if strings.Contains(sys, "この質問に答える情報はドキュメントに含まれていません。") {
+		t.Error("system prompt must not mandate a fixed Japanese fallback string")
+	}
+}

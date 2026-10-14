@@ -30,3 +30,4 @@ external/
 *.swp
 *.swo
 config.toml
+.cachedir/

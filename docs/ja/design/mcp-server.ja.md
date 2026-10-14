@@ -126,7 +126,7 @@ Engine はリクエストごとの可変状態を持たない — `retriever` �
 | ツール | 入力 | 出力 | LLM 呼出 | 用途 / トリガー（エージェント向け） |
 |---|---|---|---|---|
 | `search_docs` | `query string`、`top_k int?` | `{passages:[{content, file_path, heading_path, score}]}` | なし | インデックス済み Markdown の意味検索。ファイルパス・見出しパス・スコア付きの生パッセージを返す。情報の所在確認や、自分で読んで合成する場合に使用。 |
-| `rag_context` | `question string` | `{answer, sources:[{file_path, heading_path, score}]}` | あり（バッファ） | 質問に対しドキュメント内容のみから生成された完成回答と引用ソースを返す。出来合いの根拠付き回答が欲しい場合に使用。関連性が低い場合は「ドキュメントに含まれていません」という回答を返す — エラーではない。 |
+| `rag_context` | `question string` | `{answer, sources:[{file_path, heading_path, score}]}` | あり（バッファ） | 質問に対しドキュメント内容のみから生成された完成回答と引用ソースを返す。出来合いの根拠付き回答が欲しい場合に使用。無関係な文脈の場合は「The documents do not contain information to answer this question.」（質問の言語に翻訳）を返す — エラーではない。関連はあるが間接的な文脈は要約し、不足情報を注記する。 |
 | `list_documents` | — | `{documents:[{path, chunks, indexed_at, embedding_model}]}` | なし | インデックス済みドキュメントの一覧。検索前にナレッジベースの範囲確認や「何が登録されているか」の回答に使用。 |
 
 ---

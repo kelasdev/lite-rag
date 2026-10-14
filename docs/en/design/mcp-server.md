@@ -125,7 +125,7 @@ mode, buffering in `--json` mode, identical source output).
 | Tool | Input | Output | LLM call | Purpose / trigger (agent-facing) |
 |---|---|---|---|---|
 | `search_docs` | `query string`, `top_k int?` | `{passages:[{content, file_path, heading_path, score}]}` | No | Semantic search over indexed Markdown. Returns raw relevant passages with file path, heading path, score. Use to locate where information lives or to read and synthesize source text yourself. |
-| `rag_context` | `question string` | `{answer, sources:[{file_path, heading_path, score}]}` | Yes (buffered) | Ask a question and receive a complete answer generated strictly from document content, plus cited sources. Use for a ready-made grounded answer. Low relevance returns a "not contained in documents" message — not an error. |
+| `rag_context` | `question string` | `{answer, sources:[{file_path, heading_path, score}]}` | Yes (buffered) | Ask a question and receive a complete answer generated strictly from document content, plus cited sources. Use for a ready-made grounded answer. Unrelated context returns a "documents do not contain information to answer this question" message (in the question's language) — not an error; related-but-indirect context is summarized with the gap noted. |
 | `list_documents` | — | `{documents:[{path, chunks, indexed_at, embedding_model}]}` | No | List indexed documents. Use to check knowledge-base coverage before searching, or to answer what is indexed. |
 
 ---
