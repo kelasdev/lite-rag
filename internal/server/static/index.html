@@ -13,33 +13,28 @@
     <span class="version" id="version"></span>
   </header>
 
-  <main>
-    <div class="query-form">
-      <textarea
-        id="query"
-        placeholder="Ask a question… (Enter to send, Shift+Enter for a new line)"
-        autofocus
-      ></textarea>
-      <button id="submit">Ask</button>
-    </div>
-
-    <div class="status-bar" id="status"></div>
-
-    <div class="answer-panel" id="answer-panel">
-      <div class="answer-header">
-        <div class="answer-label">Answer</div>
-        <div class="view-toggle">
-          <button class="toggle-btn active" id="btn-rendered" data-view="rendered">Rendered</button>
-          <button class="toggle-btn" id="btn-raw" data-view="raw">Raw</button>
-        </div>
-      </div>
-      <div class="markdown-body" id="answer-body"></div>
-      <pre class="raw-body" id="answer-raw" hidden></pre>
-      <div id="sources"></div>
+  <main id="chat">
+    <div class="empty-state" id="empty-state">
+      <div class="empty-title">lite-rag — ready</div>
+      <div class="empty-hint">Ask anything about your indexed documents.<br />Answers are grounded in the indexed Markdown files.</div>
     </div>
   </main>
 
-  <footer>lite-rag — local RAG system</footer>
+  <div class="composer">
+    <div class="composer-inner">
+      <span class="prompt-sign" aria-hidden="true">❯</span>
+      <textarea
+        id="query"
+        placeholder="Type a question… (Enter to send, Shift+Enter for a new line)"
+      ></textarea>
+      <button id="submit" aria-label="Send" title="Send">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+             stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 19V5M5 12l7-7 7 7" />
+        </svg>
+      </button>
+    </div>
+  </div>
 </div>
 
 <script src="/marked.min.js"></script>

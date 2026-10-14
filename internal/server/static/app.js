@@ -1,19 +1,12 @@
-/* lite-rag Web UI */
+/* lite-rag Web UI — chat interface */
 (function () {
   'use strict';
 
   // ── DOM refs ──────────────────────────────────────────────────────────────
-  const textarea    = document.getElementById('query');
-  const submitBtn   = document.getElementById('submit');
-  const statusBar   = document.getElementById('status');
-  const answerPanel = document.getElementById('answer-panel');
-  const answerBody  = document.getElementById('answer-body');
-  const answerRaw   = document.getElementById('answer-raw');
-  const sourcesDiv  = document.getElementById('sources');
-  const btnRendered = document.getElementById('btn-rendered');
-  const btnRaw      = document.getElementById('btn-raw');
-
-  let currentView = 'rendered';
+  const chat       = document.getElementById('chat');
+  const textarea   = document.getElementById('query');
+  const submitBtn  = document.getElementById('submit');
+  const emptyState = document.getElementById('empty-state');
 
   // Prevent raw HTML blocks in LLM output from being injected into the DOM.
   // marked v15 removed the built-in sanitize option; we override the html
@@ -23,17 +16,6 @@
       html({ text }) { return escHtml(text); },
     },
   });
-
-  btnRendered.addEventListener('click', () => setView('rendered'));
-  btnRaw.addEventListener('click',      () => setView('raw'));
-
-  function setView(view) {
-    currentView = view;
-    btnRendered.classList.toggle('active', view === 'rendered');
-    btnRaw.classList.toggle('active',      view === 'raw');
-    answerBody.hidden = (view !== 'rendered');
-    answerRaw.hidden  = (view !== 'raw');
-  }
 
   // ── Version fetch ─────────────────────────────────────────────────────────
   fetch('/api/status')
@@ -57,13 +39,12 @@
     const query = textarea.value.trim();
     if (!query) return;
 
-    // Reset UI
-    setStatus('<span class="spinner"></span>Searching…');
-    statusBar.className = 'status-bar';
-    answerPanel.classList.remove('visible');
-    answerBody.innerHTML = '';
-    answerRaw.textContent = '';
-    sourcesDiv.innerHTML = '';
+    emptyState.hidden = true;
+    addUserMessage(query);
+    const assistant = addAssistantMessage();
+
+    textarea.value = '';
+    textarea.focus();
     submitBtn.disabled = true;
 
     let tokenBuffer = '';
@@ -112,19 +93,18 @@
               } catch (_) {
                 tokenBuffer += data; // fallback for non-JSON fragments
               }
-              showAnswer(tokenBuffer);
+              assistant.showAnswer(tokenBuffer);
             } else if (eventType === 'sources') {
               try {
-                const sources = JSON.parse(data);
-                renderSources(sources);
+                assistant.renderSources(JSON.parse(data));
                 sourcesReceived = true;
               } catch (_) {}
             } else if (eventType === 'error') {
               try {
                 const err = JSON.parse(data);
-                showAnswer(err.message || 'Unknown error');
+                assistant.showError(err.message || 'Unknown error');
               } catch (_) {
-                showAnswer(data);
+                assistant.showError(data);
               }
             } else if (eventType === 'done') {
               // finalize
@@ -143,45 +123,148 @@
         return pump();
       })
       .then(() => {
+        assistant.finish();
         if (!sourcesReceived) {
-          sourcesDiv.innerHTML = '';
+          assistant.sources.innerHTML = '';
         }
-        setStatus('');
         submitBtn.disabled = false;
       })
       .catch(err => {
-        setStatus('Error: ' + err.message, true);
+        assistant.showError(err.message);
+        assistant.finish();
         submitBtn.disabled = false;
       });
   });
 
+  // ── Message builders ──────────────────────────────────────────────────────
+  function scrollToBottom() {
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  function addUserMessage(text) {
+    const msg = document.createElement('div');
+    msg.className = 'msg msg-user';
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.textContent = text;
+    msg.appendChild(bubble);
+    chat.appendChild(msg);
+    scrollToBottom();
+  }
+
+  function addAssistantMessage() {
+    const msg = document.createElement('div');
+    msg.className = 'msg msg-assistant';
+
+    const head = document.createElement('div');
+    head.className = 'msg-head';
+
+    const who = document.createElement('span');
+    who.className = 'who';
+    who.textContent = 'lite-rag';
+
+    const spinner = document.createElement('span');
+    spinner.className = 'spinner';
+
+    const toggle = document.createElement('span');
+    toggle.className = 'view-toggle';
+    const btnRendered = document.createElement('button');
+    btnRendered.className = 'toggle-btn active';
+    btnRendered.textContent = 'Rendered';
+    const btnRaw = document.createElement('button');
+    btnRaw.className = 'toggle-btn';
+    btnRaw.textContent = 'Raw';
+    toggle.appendChild(btnRendered);
+    toggle.appendChild(btnRaw);
+
+    head.appendChild(who);
+    head.appendChild(spinner);
+    head.appendChild(toggle);
+
+    const body = document.createElement('div');
+    body.className = 'markdown-body';
+
+    const cursor = document.createElement('span');
+    cursor.className = 'cursor';
+    cursor.hidden = true;
+
+    const raw = document.createElement('pre');
+    raw.className = 'raw-body';
+    raw.hidden = true;
+
+    const sources = document.createElement('div');
+    sources.className = 'sources';
+
+    msg.appendChild(head);
+    msg.appendChild(body);
+    msg.appendChild(raw);
+    msg.appendChild(sources);
+    chat.appendChild(msg);
+    scrollToBottom();
+
+    let currentView = 'rendered';
+
+    function setView(view) {
+      currentView = view;
+      btnRendered.classList.toggle('active', view === 'rendered');
+      btnRaw.classList.toggle('active',      view === 'raw');
+      body.hidden = (view !== 'rendered');
+      raw.hidden  = (view !== 'raw');
+    }
+
+    btnRendered.addEventListener('click', () => setView('rendered'));
+    btnRaw.addEventListener('click',      () => setView('raw'));
+
+    return {
+      body,
+      raw,
+      sources,
+
+      showAnswer(text) {
+        body.hidden = false;
+        raw.hidden = true;
+        raw.textContent = text;
+        body.innerHTML = marked.parse(text);
+        cursor.hidden = false;
+        body.appendChild(cursor);
+        scrollToBottom();
+      },
+
+      showError(text) {
+        msg.classList.add('error');
+        cursor.hidden = true;
+        raw.textContent = text;
+        raw.hidden = false;
+        body.hidden = true;
+        btnRendered.classList.remove('active');
+        btnRaw.classList.add('active');
+        scrollToBottom();
+      },
+
+      renderSources(list) {
+        if (!list || list.length === 0) return;
+        let html = '<div class="sources-label">Sources</div>';
+        list.forEach((s, i) => {
+          const scoreClass = s.score >= 0.80 ? 'score-high' : s.score >= 0.60 ? 'score-mid' : 'score-low';
+          html += `<div class="source-item">
+            <span class="num">${i + 1}.</span>
+            <span class="filepath">${escHtml(s.file_path)}</span>
+            ${s.heading_path ? `<span class="heading">— ${escHtml(s.heading_path)}</span>` : ''}
+            <span class="score ${scoreClass}">${s.score.toFixed(3)}</span>
+          </div>`;
+        });
+        sources.innerHTML = html;
+        scrollToBottom();
+      },
+
+      finish() {
+        spinner.remove();
+        cursor.hidden = true;
+      },
+    };
+  }
+
   // ── Helpers ───────────────────────────────────────────────────────────────
-  function showAnswer(text) {
-    answerPanel.classList.add('visible');
-    answerRaw.textContent = text;
-    answerBody.innerHTML = marked.parse(text);
-  }
-
-  function renderSources(sources) {
-    if (!sources || sources.length === 0) return;
-    let html = '<div class="sources-label">Sources</div>';
-    sources.forEach((s, i) => {
-      const scoreClass = s.score >= 0.80 ? 'score-high' : s.score >= 0.60 ? 'score-mid' : 'score-low';
-      html += `<div class="source-item">
-        <span class="num">${i + 1}.</span>
-        <span class="filepath">${escHtml(s.file_path)}</span>
-        ${s.heading_path ? `<span class="heading">— ${escHtml(s.heading_path)}</span>` : ''}
-        <span class="score ${scoreClass}">${s.score.toFixed(3)}</span>
-      </div>`;
-    });
-    sourcesDiv.innerHTML = html;
-  }
-
-  function setStatus(html, warn) {
-    statusBar.innerHTML = html;
-    statusBar.className = 'status-bar' + (warn ? ' warn' : '');
-  }
-
   function escHtml(str) {
     return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
