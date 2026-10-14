@@ -75,6 +75,14 @@ lint の挙動は `.golangci.yml` で固定しています。v2 はデフォル�
 lite-rag mcp
 ```
 
+`--web` を渡すと、同じプロセスで Web UI も提供します（推奨 —
+1 プロセス・1 DuckDB 接続でロック競合なし）:
+
+```sh
+lite-rag mcp --web                      # 設定の server.addr を使用
+lite-rag mcp --web --web-addr :8080     # リッスンアドレスを上書き
+```
+
 サーバーは標準入出力経由で JSON-RPC 2.0 を話します（stdio トランスポート）。
 診断出力は全て stderr へ出力されます。3 つのツールを提供します:
 
@@ -93,7 +101,7 @@ lite-rag mcp
 mcp_servers:
   lite-rag:
     command: /home/isekai/lite-rag/dist/lite-rag
-    args: ["mcp", "--config", "/home/isekai/.config/lite-rag/config.toml"]
+    args: ["mcp", "--web", "--config", "/home/isekai/.config/lite-rag/config.toml"]
     enabled: true
     timeout: 120
 ```

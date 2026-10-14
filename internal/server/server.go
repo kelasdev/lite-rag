@@ -37,9 +37,8 @@ func New(db *database.DB, client *llm.Client, cfg *config.Config, v string) *Ser
 	return &Server{db: db, client: client, cfg: cfg}
 }
 
-// Start registers routes, serves static files, and blocks until SIGINT/SIGTERM.
-// addr should be a host:port string, e.g. "127.0.0.1:8080".
-func (s *Server) Start(addr string) error {
+// Handler builds the route mux: the JSON API plus the embedded Web UI.
+func (s *Server) Handler() (http.Handler, error) {
 	mux := http.NewServeMux()
 
 	// API routes
@@ -49,14 +48,38 @@ func (s *Server) Start(addr string) error {
 	// Static Web UI — strip the "static/" prefix from the embedded FS
 	uiFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
-		return fmt.Errorf("server: embed sub: %w", err)
+		return nil, fmt.Errorf("server: embed sub: %w", err)
 	}
 	mux.Handle("/", http.FileServerFS(uiFS))
 
-	srv := &http.Server{
-		Addr:    addr,
-		Handler: mux,
+	return mux, nil
+}
+
+// Listen serves the HTTP API and Web UI on addr and blocks until the
+// listener stops. Unlike Start it installs no signal handlers, so it can
+// run alongside another server in the same process (e.g. lite-rag mcp --web).
+// addr should be a host:port string, e.g. "127.0.0.1:8080".
+func (s *Server) Listen(addr string) error {
+	handler, err := s.Handler()
+	if err != nil {
+		return err
 	}
+	srv := &http.Server{Addr: addr, Handler: handler}
+	slog.Info("server started", "addr", addr, "url", "http://"+addr)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		return err
+	}
+	return nil
+}
+
+// Start registers routes, serves static files, and blocks until SIGINT/SIGTERM.
+// addr should be a host:port string, e.g. "127.0.0.1:8080".
+func (s *Server) Start(addr string) error {
+	handler, err := s.Handler()
+	if err != nil {
+		return err
+	}
+	srv := &http.Server{Addr: addr, Handler: handler}
 
 	// Graceful shutdown on SIGINT / SIGTERM.
 	quit := make(chan os.Signal, 1)

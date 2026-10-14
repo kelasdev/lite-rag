@@ -75,6 +75,14 @@ query the indexed documents as tools:
 lite-rag mcp
 ```
 
+Pass `--web` to also serve the Web UI from the same process (recommended —
+one process, one DuckDB connection, no lock conflict):
+
+```sh
+lite-rag mcp --web                      # uses server.addr from the config
+lite-rag mcp --web --web-addr :8080     # or override the listen address
+```
+
 The server speaks JSON-RPC 2.0 over stdin/stdout (the stdio transport); all
 diagnostics go to stderr. It exposes three tools:
 
@@ -93,7 +101,7 @@ Add the server to the client's configuration. Example for Hermes Agent
 mcp_servers:
   lite-rag:
     command: /home/isekai/lite-rag/dist/lite-rag
-    args: ["mcp", "--config", "/home/isekai/.config/lite-rag/config.toml"]
+    args: ["mcp", "--web", "--config", "/home/isekai/.config/lite-rag/config.toml"]
     enabled: true
     timeout: 120
 ```

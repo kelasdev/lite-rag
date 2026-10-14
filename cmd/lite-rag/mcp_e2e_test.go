@@ -3,12 +3,16 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -132,4 +136,77 @@ func e2eText(t *testing.T, res *mcp.CallToolResult) string {
 		t.Fatalf("unexpected content type %T", res.Content[0])
 	}
 	return tc.Text
+}
+
+// TestMCPCmd_E2E_WithWeb runs the MCP server and the Web UI in one process
+// (the --web flag): both share the single DuckDB connection, so there is no
+// lock conflict between them.
+func TestMCPCmd_E2E_WithWeb(t *testing.T) {
+	srv := mockLLM(t)
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	cfg := writeCfg(t, dir, srv.URL, dbPath)
+
+	docDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(docDir, "doc.md"),
+		[]byte("# Topic\n\nSome content about widgets."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run("--config", cfg, "index", "--dir", docDir); err != nil {
+		t.Fatalf("index: %v", err)
+	}
+
+	webAddr := "127.0.0.1:18098"
+	client := mcp.NewClient(&mcp.Implementation{Name: "e2e-client"}, nil)
+	transport := &mcp.CommandTransport{
+		Command: exec.Command(e2eBinary, "--config", cfg, "mcp", "--web", "--web-addr", webAddr),
+	}
+	ctx := context.Background()
+	session, err := client.Connect(ctx, transport, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() {
+		session.Close()
+		// Wait for the binary to release the web port before the next run.
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			conn, dialErr := net.DialTimeout("tcp", webAddr, 200*time.Millisecond)
+			if dialErr != nil {
+				return // port free
+			}
+			conn.Close()
+			time.Sleep(100 * time.Millisecond)
+		}
+		t.Error("web port still held after session close")
+	}()
+
+	// MCP side: handshake + tools must work exactly as without --web.
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "list_documents",
+		Arguments: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("list_documents: %v", err)
+	}
+	if !strings.Contains(e2eText(t, res), "doc.md") {
+		t.Errorf("list_documents must list doc.md, got: %s", e2eText(t, res))
+	}
+
+	// Web side: the UI must be reachable on the same process.
+	httpResp, err := http.Get("http://" + webAddr + "/")
+	if err != nil {
+		t.Fatalf("web ui not reachable with --web: %v", err)
+	}
+	defer httpResp.Body.Close()
+	if httpResp.StatusCode != http.StatusOK {
+		t.Errorf("web ui status: want 200, got %d", httpResp.StatusCode)
+	}
+	body, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		t.Fatalf("read web ui body: %v", err)
+	}
+	if !strings.Contains(string(body), "lite-rag") {
+		t.Errorf("web ui must serve the lite-rag page, got: %.100s", body)
+	}
 }
