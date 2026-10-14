@@ -38,7 +38,7 @@ All third-party dependencies are listed here as required by RULES.md §18.
 - **License:** MIT
 - **Compliance:** No restrictions.
 
-### `golang.org/x/text` @ v0.35.0
+### `golang.org/x/text` @ v0.43.0
 
 - **Purpose:** Unicode normalization (NFKC) for Japanese/English mixed-text handling.
   Used in `internal/normalizer` to normalize full-width characters, half-width Katakana,
@@ -47,6 +47,19 @@ All third-party dependencies are listed here as required by RULES.md §18.
   implement correctly. This is the standard library extension maintained by the Go team.
 - **License:** BSD 3-Clause
 - **Compliance:** No restrictions.
+
+### `github.com/modelcontextprotocol/go-sdk` @ v1.8.0
+
+- **Purpose:** Official Go SDK for the Model Context Protocol. Used by the `mcp`
+  subcommand (`internal/mcpserver`) to serve the RAG pipeline as MCP tools over
+  the stdio transport: server construction, typed tool handlers with automatic
+  input-schema inference, and JSON-RPC lifecycle handling.
+- **Why not in-house:** Hand-rolling the MCP protocol (initialize handshake,
+  capabilities negotiation, tools/list, tools/call, cancellation) risks subtle
+  incompatibility with MCP clients. This is the SDK maintained by the MCP
+  project in collaboration with Google.
+- **License:** Apache 2.0
+- **Compliance:** No restrictions for internal or commercial use.
 
 ---
 
