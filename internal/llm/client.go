@@ -16,23 +16,35 @@ import (
 
 // Client is a thin wrapper around the OpenAI-compatible REST API.
 // It uses only net/http from the standard library.
+// Chat requests (/chat/completions) go to chatBaseURL with apiKey.
+// Embedding requests (/embeddings) go to embedBaseURL with embedAPIKey,
+// allowing chat and embedding to live on two different servers.
 type Client struct {
-	baseURL    string
-	apiKey     string
-	embedModel string
-	chatModel  string
-	http       *http.Client
+	chatBaseURL  string
+	embedBaseURL string
+	apiKey       string
+	embedAPIKey  string
+	embedModel   string
+	chatModel    string
+	http         *http.Client
 }
 
-// New creates a Client. Timeouts are intentionally long to accommodate
-// local LLM inference latency.
+// New creates a Client pointed at a single base URL for both chat and
+// embeddings. Kept for backward compatibility with existing configs/tests.
 func New(baseURL, apiKey, embedModel, chatModel string) *Client {
+	return NewSplit(baseURL, baseURL, apiKey, apiKey, embedModel, chatModel)
+}
+
+// NewSplit creates a Client with separate chat and embedding endpoints.
+func NewSplit(chatBaseURL, embedBaseURL, apiKey, embedAPIKey, embedModel, chatModel string) *Client {
 	return &Client{
-		baseURL:    strings.TrimRight(baseURL, "/"),
-		apiKey:     apiKey,
-		embedModel: embedModel,
-		chatModel:  chatModel,
-		http:       &http.Client{Timeout: 5 * time.Minute},
+		chatBaseURL:  strings.TrimRight(chatBaseURL, "/"),
+		embedBaseURL: strings.TrimRight(embedBaseURL, "/"),
+		apiKey:       apiKey,
+		embedAPIKey:  embedAPIKey,
+		embedModel:   embedModel,
+		chatModel:    chatModel,
+		http:         &http.Client{Timeout: 5 * time.Minute},
 	}
 }
 
@@ -59,7 +71,7 @@ func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error)
 		return nil, fmt.Errorf("llm.Embed marshal: %w", err)
 	}
 
-	resp, err := c.post(ctx, "/embeddings", body)
+	resp, err := c.postTo(c.embedBaseURL, c.embedAPIKey, ctx, "/embeddings", body)
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +134,7 @@ func (c *Client) Chat(ctx context.Context, messages []Message, w io.Writer) erro
 		return fmt.Errorf("llm.Chat marshal: %w", err)
 	}
 
-	resp, err := c.post(ctx, "/chat/completions", body)
+	resp, err := c.postTo(c.chatBaseURL, c.apiKey, ctx, "/chat/completions", body)
 	if err != nil {
 		return err
 	}
@@ -224,20 +236,21 @@ func parseRewriteVariants(output string) []string {
 
 // ── HTTP helpers ───────────────────────────────────────────────────────────
 
-// post sends a JSON POST request and returns the response.
-// It checks for non-2xx status and returns a descriptive error.
-func (c *Client) post(ctx context.Context, path string, body []byte) (*http.Response, error) {
+// postTo sends a JSON POST request to an explicit baseURL/apiKey pair and
+// returns the response. It checks for non-2xx status and returns a
+// descriptive error.
+func (c *Client) postTo(baseURL, apiKey string, ctx context.Context, path string, body []byte) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(
 		ctx, http.MethodPost,
-		c.baseURL+path,
+		baseURL+path,
 		bytes.NewReader(body),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("llm: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
 	resp, err := c.http.Do(req)

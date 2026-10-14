@@ -44,7 +44,7 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	}
 	defer db.Close()
 
-	client := llm.New(cfg.API.BaseURL, cfg.API.APIKey, cfg.Models.Embedding, cfg.Models.Chat)
+	client := llm.NewSplit(cfg.API.BaseURL, cfg.API.EffectiveEmbedURL(), cfg.API.APIKey, cfg.API.EffectiveEmbedAPIKey(), cfg.Models.Embedding, cfg.Models.Chat)
 
 	var rewriter retriever.QueryRewriter
 	if cfg.Retrieval.QueryRewrite {

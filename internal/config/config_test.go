@@ -115,3 +115,84 @@ func TestEnvOverride_Models(t *testing.T) {
 		t.Errorf("Chat = %q, want env override", cfg.Models.Chat)
 	}
 }
+
+// ── Split chat / embedding endpoints ────────────────────────────────────────
+
+func TestEffectiveEmbed_FallsBackToBaseURL(t *testing.T) {
+	// An empty embed_url must fall back to base_url so existing configs keep working.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	content := `
+[api]
+base_url = "http://chat.example/v1"
+api_key  = "chat-key"
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.API.EffectiveEmbedURL(); got != "http://chat.example/v1" {
+		t.Errorf("EffectiveEmbedURL() = %q, want base_url fallback", got)
+	}
+	if got := cfg.API.EffectiveEmbedAPIKey(); got != "chat-key" {
+		t.Errorf("EffectiveEmbedAPIKey() = %q, want api_key fallback", got)
+	}
+}
+
+func TestEffectiveEmbed_UsesSeparateEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	content := `
+[api]
+base_url       = "http://chat.example/v1"
+api_key        = "chat-key"
+embed_url      = "http://embed.example/v1"
+embed_api_key  = "embed-key"
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.API.EffectiveEmbedURL(); got != "http://embed.example/v1" {
+		t.Errorf("EffectiveEmbedURL() = %q, want embed_url", got)
+	}
+	if got := cfg.API.EffectiveEmbedAPIKey(); got != "embed-key" {
+		t.Errorf("EffectiveEmbedAPIKey() = %q, want embed_api_key", got)
+	}
+	// Chat settings must remain untouched by the embedding overrides.
+	if cfg.API.BaseURL != "http://chat.example/v1" {
+		t.Errorf("BaseURL = %q, want unchanged", cfg.API.BaseURL)
+	}
+	if cfg.API.APIKey != "chat-key" {
+		t.Errorf("APIKey = %q, want unchanged", cfg.API.APIKey)
+	}
+}
+
+func TestEnvOverride_EmbedEndpoint(t *testing.T) {
+	t.Setenv("LITE_RAG_API_BASE_URL", "http://chat.example/v1")
+	t.Setenv("LITE_RAG_API_KEY", "chat-key")
+	t.Setenv("LITE_RAG_API_EMBED_URL", "http://embed.example/v1")
+	t.Setenv("LITE_RAG_API_EMBED_API_KEY", "embed-key")
+
+	cfg, err := config.Load("/nonexistent/config.toml")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.API.EffectiveEmbedURL(); got != "http://embed.example/v1" {
+		t.Errorf("EffectiveEmbedURL() = %q, want env override", got)
+	}
+	if got := cfg.API.EffectiveEmbedAPIKey(); got != "embed-key" {
+		t.Errorf("EffectiveEmbedAPIKey() = %q, want env override", got)
+	}
+	if cfg.API.BaseURL != "http://chat.example/v1" {
+		t.Errorf("BaseURL = %q, want chat URL unaffected", cfg.API.BaseURL)
+	}
+}

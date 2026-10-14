@@ -113,7 +113,7 @@ func main() {
 	}
 	defer db.Close()
 
-	client := llm.New(cfg.API.BaseURL, cfg.API.APIKey, cfg.Models.Embedding, cfg.Models.Chat)
+	client := llm.NewSplit(cfg.API.BaseURL, cfg.API.EffectiveEmbedURL(), cfg.API.APIKey, cfg.API.EffectiveEmbedAPIKey(), cfg.Models.Embedding, cfg.Models.Chat)
 
 	retCfg := cfg.Retrieval
 	retCfg.QueryRewrite = false // controlled per run below

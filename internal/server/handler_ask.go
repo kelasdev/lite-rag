@@ -105,27 +105,23 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Deduplicate sources by file path, keeping the highest-score passage per file.
-	type seenEntry struct {
-		idx   int
-		entry sourceEntry
-	}
-	seen := make(map[string]seenEntry, len(result.passages))
+	seen := make(map[string]sourceEntry, len(result.passages))
 	var order []string
 	for _, p := range result.passages {
-		if prev, ok := seen[p.FilePath]; !ok || p.Score > prev.entry.Score {
+		if prev, ok := seen[p.FilePath]; !ok || p.Score > prev.Score {
 			if !ok {
 				order = append(order, p.FilePath)
 			}
-			seen[p.FilePath] = seenEntry{entry: sourceEntry{
+			seen[p.FilePath] = sourceEntry{
 				FilePath:    p.FilePath,
 				HeadingPath: p.HeadingPath,
 				Score:       p.Score,
-			}}
+			}
 		}
 	}
 	sources := make([]sourceEntry, 0, len(order))
 	for _, fp := range order {
-		sources = append(sources, seen[fp].entry)
+		sources = append(sources, seen[fp])
 	}
 
 	topScore := float32(0)

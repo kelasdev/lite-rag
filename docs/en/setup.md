@@ -76,9 +76,27 @@ All settings in the config file can be overridden via environment variables:
 |---|---|
 | `LITE_RAG_API_BASE_URL` | `api.base_url` |
 | `LITE_RAG_API_KEY` | `api.api_key` |
+| `LITE_RAG_API_EMBED_URL` | `api.embed_url` |
+| `LITE_RAG_API_EMBED_API_KEY` | `api.embed_api_key` |
 | `LITE_RAG_EMBEDDING_MODEL` | `models.embedding` |
 | `LITE_RAG_CHAT_MODEL` | `models.chat` |
 | `LITE_RAG_DB_PATH` | `database.path` |
+
+### Separate Chat and Embedding Servers
+
+Chat completions and embeddings can be served by two different servers. Set
+`api.embed_url` and `api.embed_api_key` to route `/embeddings` elsewhere:
+
+```toml
+[api]
+base_url       = "http://localhost:1234/v1"  # /chat/completions
+api_key        = "lm-studio"
+embed_url      = "http://localhost:8000/v1"  # /embeddings
+embed_api_key  = "embed-key"
+```
+
+Leaving `embed_url` / `embed_api_key` empty falls back to `base_url` /
+`api_key`, so existing configs keep working unchanged.
 
 The default config file path follows the XDG Base Directory Specification:
 `$XDG_CONFIG_HOME/lite-rag/config.toml` (defaults to `~/.config/lite-rag/config.toml`).

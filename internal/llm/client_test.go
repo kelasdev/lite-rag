@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"lite-rag/internal/llm"
@@ -46,7 +47,7 @@ func TestEmbed_Success(t *testing.T) {
 				{"index": 1, "embedding": []float32{0.5, 0.6, 0.7, 0.8}},
 			},
 		}
-		json.NewEncoder(w).Encode(resp)
+		json.NewEncoder(w).Encode(resp) //nolint:errcheck //nolint:errcheck
 	}))
 	defer srv.Close()
 
@@ -75,7 +76,7 @@ func TestEmbed_OutOfOrderIndex(t *testing.T) {
 				{"index": 0, "embedding": []float32{0.1}},
 			},
 		}
-		json.NewEncoder(w).Encode(resp)
+		json.NewEncoder(w).Encode(resp) //nolint:errcheck
 	}))
 	defer srv.Close()
 
@@ -96,7 +97,7 @@ func TestEmbed_NegativeIndex(t *testing.T) {
 				{"index": -1, "embedding": []float32{0.1}},
 			},
 		}
-		json.NewEncoder(w).Encode(resp)
+		json.NewEncoder(w).Encode(resp) //nolint:errcheck
 	}))
 	defer srv.Close()
 
@@ -131,7 +132,7 @@ func TestEmbed_InvalidBaseURL(t *testing.T) {
 
 func TestEmbed_InvalidJSONResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("not-json"))
+		w.Write([]byte("not-json")) //nolint:errcheck
 	}))
 	defer srv.Close()
 
@@ -151,7 +152,7 @@ func TestEmbed_MissingEmbeddingInResponse(t *testing.T) {
 				// index 1 is absent
 			},
 		}
-		json.NewEncoder(w).Encode(resp)
+		json.NewEncoder(w).Encode(resp) //nolint:errcheck
 	}))
 	defer srv.Close()
 
@@ -177,12 +178,12 @@ data: [DONE]
 		var req struct {
 			Stream bool `json:"stream"`
 		}
-		json.NewDecoder(r.Body).Decode(&req)
+		json.NewDecoder(r.Body).Decode(&req) //nolint:errcheck
 		if !req.Stream {
 			t.Error("stream flag not set")
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte(sse))
+		w.Write([]byte(sse)) //nolint:errcheck
 	}))
 	defer srv.Close()
 
@@ -206,7 +207,7 @@ data: {"choices":[{"delta":{"content":"ok"},"finish_reason":null}]}
 data: [DONE]
 `
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(sse))
+		w.Write([]byte(sse)) //nolint:errcheck
 	}))
 	defer srv.Close()
 
@@ -239,7 +240,7 @@ func TestChat_WriteError(t *testing.T) {
 data: [DONE]
 `
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(sse))
+		w.Write([]byte(sse)) //nolint:errcheck
 	}))
 	defer srv.Close()
 
@@ -261,7 +262,7 @@ func TestRewriteQuery_ReturnsJAAndENVariants(t *testing.T) {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte(sse)) //nolint:errcheck
+		w.Write([]byte(sse)) //nolint:errcheck //nolint:errcheck
 	}))
 	defer srv.Close()
 
@@ -285,7 +286,7 @@ func TestRewriteQuery_FallsBackToSingleVariant(t *testing.T) {
 	// Server returns a single-language string (no JA:/EN: format) — fallback path.
 	sse := `data: {"choices":[{"delta":{"content":"rewritten query"},"finish_reason":null}]}` + "\ndata: [DONE]\n"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(sse)) //nolint:errcheck
+		w.Write([]byte(sse)) //nolint:errcheck //nolint:errcheck
 	}))
 	defer srv.Close()
 
@@ -322,7 +323,7 @@ data: {"choices":[{"delta":{"content":"fine"},"finish_reason":null}]}
 data: [DONE]
 `
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(sse))
+		w.Write([]byte(sse)) //nolint:errcheck
 	}))
 	defer srv.Close()
 
@@ -333,5 +334,159 @@ data: [DONE]
 	}
 	if buf.String() != "fine" {
 		t.Errorf("got %q, want %q", buf.String(), "fine")
+	}
+}
+
+// ── Split chat / embedding endpoints ────────────────────────────────────────
+
+// endpointSpy records which server received which path and auth header.
+type endpointSpy struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (s *endpointSpy) record(r *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, r.URL.Path+" "+r.Header.Get("Authorization"))
+}
+
+func (s *endpointSpy) snapshot() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.calls...)
+}
+
+// newEmbedSpyServer serves /embeddings and records requests.
+func newEmbedSpyServer(t *testing.T, spy *endpointSpy) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		spy.record(r)
+		resp := map[string]any{
+			"data": []map[string]any{{"index": 0, "embedding": []float32{0.1, 0.2}}},
+		}
+		json.NewEncoder(w).Encode(resp) //nolint:errcheck //nolint:errcheck
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// newChatSpyServer serves /chat/completions as SSE and records requests.
+func newChatSpyServer(t *testing.T, spy *endpointSpy) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		spy.record(r)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n")
+		fmt.Fprint(w, "data: [DONE]\n")
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestNewSplit_RoutesEmbedToEmbedServer(t *testing.T) {
+	spy := &endpointSpy{}
+	embedSrv := newEmbedSpyServer(t, spy)
+	chatSrv := newChatSpyServer(t, spy)
+
+	c := llm.NewSplit(chatSrv.URL, embedSrv.URL, "chat-key", "embed-key", "e", "c")
+	if _, err := c.Embed(context.Background(), []string{"x"}); err != nil {
+		t.Fatalf("Embed() error = %v", err)
+	}
+
+	calls := spy.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 call, got %v", calls)
+	}
+	if calls[0] != "/embeddings Bearer embed-key" {
+		t.Errorf("embed call = %q, want %q", calls[0], "/embeddings Bearer embed-key")
+	}
+}
+
+func TestNewSplit_RoutesChatToChatServer(t *testing.T) {
+	spy := &endpointSpy{}
+	embedSrv := newEmbedSpyServer(t, spy)
+	chatSrv := newChatSpyServer(t, spy)
+
+	c := llm.NewSplit(chatSrv.URL, embedSrv.URL, "chat-key", "embed-key", "e", "c")
+	var buf strings.Builder
+	if err := c.Chat(context.Background(), nil, &buf); err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+
+	calls := spy.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 call, got %v", calls)
+	}
+	if calls[0] != "/chat/completions Bearer chat-key" {
+		t.Errorf("chat call = %q, want %q", calls[0], "/chat/completions Bearer chat-key")
+	}
+}
+
+func TestNewSplit_RewriteQueryUsesChatServer(t *testing.T) {
+	spy := &endpointSpy{}
+	embedSrv := newEmbedSpyServer(t, spy)
+	chatSrv := newChatSpyServer(t, spy)
+
+	c := llm.NewSplit(chatSrv.URL, embedSrv.URL, "chat-key", "embed-key", "e", "c")
+	if _, err := c.RewriteQuery(context.Background(), "query"); err != nil {
+		t.Fatalf("RewriteQuery() error = %v", err)
+	}
+
+	calls := spy.snapshot()
+	if len(calls) != 1 || calls[0] != "/chat/completions Bearer chat-key" {
+		t.Errorf("rewrite calls = %v, want chat endpoint only", calls)
+	}
+}
+
+func TestNewSplit_ChatServerDoesNotReceiveEmbeddings(t *testing.T) {
+	// The chat server must never see /embeddings even though it is reachable.
+	spy := &endpointSpy{}
+	embedSrv := newEmbedSpyServer(t, spy)
+	chatSrv := newChatSpyServer(t, spy)
+
+	c := llm.NewSplit(chatSrv.URL, embedSrv.URL, "k1", "k2", "e", "c")
+	if _, err := c.Embed(context.Background(), []string{"x"}); err != nil {
+		t.Fatalf("Embed() error = %v", err)
+	}
+	for _, call := range spy.snapshot() {
+		if strings.HasPrefix(call, "/chat/completions") {
+			t.Errorf("embeddings leaked to chat server: %v", spy.snapshot())
+		}
+	}
+}
+
+func TestNewSplit_EmptyEmbedKeySendsNoAuthHeader(t *testing.T) {
+	spy := &endpointSpy{}
+	embedSrv := newEmbedSpyServer(t, spy)
+	chatSrv := newChatSpyServer(t, spy)
+
+	c := llm.NewSplit(chatSrv.URL, embedSrv.URL, "chat-key", "", "e", "c")
+	if _, err := c.Embed(context.Background(), []string{"x"}); err != nil {
+		t.Fatalf("Embed() error = %v", err)
+	}
+	calls := spy.snapshot()
+	if len(calls) != 1 || calls[0] != "/embeddings " {
+		t.Errorf("call = %q, want %q", calls[0], "/embeddings ")
+	}
+}
+
+func TestNewSplit_TrimsTrailingSlashOnBothURLs(t *testing.T) {
+	spy := &endpointSpy{}
+	embedSrv := newEmbedSpyServer(t, spy)
+	chatSrv := newChatSpyServer(t, spy)
+
+	c := llm.NewSplit(chatSrv.URL+"/", embedSrv.URL+"/", "k", "k", "e", "c")
+	if _, err := c.Embed(context.Background(), []string{"x"}); err != nil {
+		t.Fatalf("Embed() error = %v", err)
+	}
+	var buf strings.Builder
+	if err := c.Chat(context.Background(), nil, &buf); err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+
+	// A missing trim would produce "/v1//embeddings" style paths and 404.
+	if len(spy.snapshot()) != 2 {
+		t.Errorf("calls = %v, want 2", spy.snapshot())
 	}
 }

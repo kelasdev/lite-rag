@@ -30,9 +30,31 @@ type ServerConfig struct {
 }
 
 // APIConfig holds LLM API connection settings.
+// BaseURL/APIKey serve chat completions (/chat/completions, RewriteQuery).
+// EmbedURL/EmbedAPIKey serve embeddings (/embeddings).
+// When EmbedURL is empty, EffectiveEmbedURL falls back to BaseURL.
+// When EmbedAPIKey is empty, EffectiveEmbedAPIKey falls back to APIKey.
 type APIConfig struct {
-	BaseURL string `toml:"base_url"`
-	APIKey  string `toml:"api_key"`
+	BaseURL     string `toml:"base_url"`
+	APIKey      string `toml:"api_key"`
+	EmbedURL    string `toml:"embed_url"`
+	EmbedAPIKey string `toml:"embed_api_key"`
+}
+
+// EffectiveEmbedURL returns EmbedURL when set, otherwise BaseURL.
+func (a APIConfig) EffectiveEmbedURL() string {
+	if a.EmbedURL != "" {
+		return a.EmbedURL
+	}
+	return a.BaseURL
+}
+
+// EffectiveEmbedAPIKey returns EmbedAPIKey when set, otherwise APIKey.
+func (a APIConfig) EffectiveEmbedAPIKey() string {
+	if a.EmbedAPIKey != "" {
+		return a.EmbedAPIKey
+	}
+	return a.APIKey
 }
 
 // ModelsConfig specifies which models to use.
@@ -136,6 +158,12 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("LITE_RAG_API_KEY"); v != "" {
 		cfg.API.APIKey = v
+	}
+	if v := os.Getenv("LITE_RAG_API_EMBED_URL"); v != "" {
+		cfg.API.EmbedURL = v
+	}
+	if v := os.Getenv("LITE_RAG_API_EMBED_API_KEY"); v != "" {
+		cfg.API.EmbedAPIKey = v
 	}
 	if v := os.Getenv("LITE_RAG_EMBEDDING_MODEL"); v != "" {
 		cfg.Models.Embedding = v

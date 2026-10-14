@@ -53,8 +53,10 @@ via an OpenAI-compatible API.
 
 ```toml
 [api]
-base_url     = "http://localhost:1234/v1"
-api_key      = "lm-studio"           # placeholder; not validated by LM Studio
+base_url     = "http://localhost:1234/v1"   # /chat/completions
+api_key      = "lm-studio"                 # placeholder; not validated by LM Studio
+embed_url    = ""                         # optional; /embeddings endpoint
+embed_api_key = ""                        # optional; falls back to api_key
 
 [models]
 embedding    = "nomic-ai/nomic-embed-text-v1.5-GGUF"

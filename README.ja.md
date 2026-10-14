@@ -70,8 +70,10 @@ make build
 
 ```toml
 [api]
-base_url = "http://localhost:1234/v1"   # LM Studio のデフォルト
+base_url = "http://localhost:1234/v1"   # LM Studio のデフォルト（チャット補完）
 api_key  = "lm-studio"                 # 任意の値（LM Studio は検証しない）
+embed_url     = ""                     # 任意。/embeddings 用の別エンドポイント
+embed_api_key = ""                     # 任意。未設定時は api_key にフォールバック
 
 [models]
 embedding = "nomic-ai/nomic-embed-text-v1.5-GGUF"
@@ -98,9 +100,16 @@ log_level = "info"             # info | debug | warn | error
 |---|---|
 | `LITE_RAG_API_BASE_URL` | `api.base_url` |
 | `LITE_RAG_API_KEY` | `api.api_key` |
+| `LITE_RAG_API_EMBED_URL` | `api.embed_url` |
+| `LITE_RAG_API_EMBED_API_KEY` | `api.embed_api_key` |
 | `LITE_RAG_EMBEDDING_MODEL` | `models.embedding` |
 | `LITE_RAG_CHAT_MODEL` | `models.chat` |
 | `LITE_RAG_DB_PATH` | `database.path` |
+
+チャットと埋め込みを**異なるサーバー**に配置できます。`api.embed_url`
+（および任意の `api.embed_api_key`）を設定すると `/embeddings` だけが別
+エンドポイントへ送信されます。空欄の場合は `api.base_url` / `api.api_key`
+にフォールバックします。
 
 ---
 

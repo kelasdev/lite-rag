@@ -53,7 +53,7 @@ func runReindex(cmd *cobra.Command, _ []string) error {
 	fmt.Fprintf(os.Stderr, "Found %d document(s) with stale embeddings. Re-indexing with model %q...\n",
 		len(stale), cfg.Models.Embedding)
 
-	client := llm.New(cfg.API.BaseURL, cfg.API.APIKey, cfg.Models.Embedding, cfg.Models.Chat)
+	client := llm.NewSplit(cfg.API.BaseURL, cfg.API.EffectiveEmbedURL(), cfg.API.APIKey, cfg.API.EffectiveEmbedAPIKey(), cfg.Models.Embedding, cfg.Models.Chat)
 	idx := indexer.New(db, client, cfg.Models.Embedding, cfg.Retrieval)
 
 	stats, err := idx.Reindex(cmd.Context())

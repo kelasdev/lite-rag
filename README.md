@@ -78,8 +78,10 @@ Copy `config.example.toml` to `~/.config/lite-rag/config.toml` and adjust:
 
 ```toml
 [api]
-base_url = "http://localhost:1234/v1"   # LM Studio default
+base_url = "http://localhost:1234/v1"   # LM Studio default (chat completions)
 api_key  = "lm-studio"                 # arbitrary; LM Studio does not validate
+embed_url     = ""                     # optional; separate /embeddings endpoint
+embed_api_key = ""                     # optional; falls back to api_key
 
 [models]
 embedding = "nomic-ai/nomic-embed-text-v1.5-GGUF"
@@ -106,9 +108,16 @@ Environment variables override file settings:
 |---|---|
 | `LITE_RAG_API_BASE_URL` | `api.base_url` |
 | `LITE_RAG_API_KEY` | `api.api_key` |
+| `LITE_RAG_API_EMBED_URL` | `api.embed_url` |
+| `LITE_RAG_API_EMBED_API_KEY` | `api.embed_api_key` |
 | `LITE_RAG_EMBEDDING_MODEL` | `models.embedding` |
 | `LITE_RAG_CHAT_MODEL` | `models.chat` |
 | `LITE_RAG_DB_PATH` | `database.path` |
+
+Chat and embeddings can live on **different servers**. Set `api.embed_url`
+(and optionally `api.embed_api_key`) to route `/embeddings` to a separate
+endpoint; `/chat/completions` keeps using `api.base_url`. Empty values fall
+back to `api.base_url` / `api.api_key`.
 
 ---
 

@@ -51,8 +51,10 @@
 
 ```toml
 [api]
-base_url     = "http://localhost:1234/v1"
-api_key      = "lm-studio"
+base_url      = "http://localhost:1234/v1"   # /chat/completions
+api_key       = "lm-studio"
+embed_url     = ""                          # 任意。/embeddings 用エンドポイント
+embed_api_key = ""                          # 任意。未設定時は api_key にフォールバック
 
 [models]
 embedding    = "nomic-ai/nomic-embed-text-v1.5-GGUF"

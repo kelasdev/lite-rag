@@ -55,7 +55,7 @@ func runIndex(cmd *cobra.Command, _ []string) error {
 	}
 	defer db.Close()
 
-	client := llm.New(cfg.API.BaseURL, cfg.API.APIKey, cfg.Models.Embedding, cfg.Models.Chat)
+	client := llm.NewSplit(cfg.API.BaseURL, cfg.API.EffectiveEmbedURL(), cfg.API.APIKey, cfg.API.EffectiveEmbedAPIKey(), cfg.Models.Embedding, cfg.Models.Chat)
 	idx := indexer.New(db, client, cfg.Models.Embedding, cfg.Retrieval)
 
 	if indexFile != "" {

@@ -64,9 +64,27 @@ make setup
 |---|---|
 | `LITE_RAG_API_BASE_URL` | `api.base_url` |
 | `LITE_RAG_API_KEY` | `api.api_key` |
+| `LITE_RAG_API_EMBED_URL` | `api.embed_url` |
+| `LITE_RAG_API_EMBED_API_KEY` | `api.embed_api_key` |
 | `LITE_RAG_EMBEDDING_MODEL` | `models.embedding` |
 | `LITE_RAG_CHAT_MODEL` | `models.chat` |
 | `LITE_RAG_DB_PATH` | `database.path` |
+
+### チャットと埋め込みで異なるサーバーを指定する場合
+
+チャット補完と埋め込みを別々のサーバーでホストできます。`api.embed_url` と
+`api.embed_api_key` を設定すると、`/embeddings` のみ別サーバーへ送信されます：
+
+```toml
+[api]
+base_url       = "http://localhost:1234/v1"  # /chat/completions
+api_key        = "lm-studio"
+embed_url      = "http://localhost:8000/v1"  # /embeddings
+embed_api_key  = "embed-key"
+```
+
+`embed_url` / `embed_api_key` を空欄にすると `base_url` / `api_key` に
+フォールバックするため、既存の設定ファイルは変更なしで動作し続けます。
 
 デフォルトの設定ファイルパスは XDG Base Directory 仕様に従います：
 `$XDG_CONFIG_HOME/lite-rag/config.toml`（デフォルト: `~/.config/lite-rag/config.toml`）。
