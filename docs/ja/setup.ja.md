@@ -66,6 +66,42 @@ lint の挙動は `.golangci.yml` で固定しています。v2 はデフォル�
 `std-error-handling`、`common-false-positives`、`legacy`）を明示的に有効にして
 います。アップグレード前後で lint ゲートの挙動は変わりません。
 
+## MCP サーバー
+
+`lite-rag` は MCP (Model Context Protocol) サーバーとして動作でき、AI エージェントが
+インデックス済みドキュメントをツールとして照会できます:
+
+```sh
+lite-rag mcp
+```
+
+サーバーは標準入出力経由で JSON-RPC 2.0 を話します（stdio トランスポート）。
+診断出力は全て stderr へ出力されます。3 つのツールを提供します:
+
+| ツール | 用途 |
+|--------|------|
+| `search_docs` | 意味検索。生パッセージ（内容・ファイルパス・見出しパス・スコア）を返す — LLM 呼出なし |
+| `rag_context` | フル Q&A: ドキュメントに基づく回答と引用ソース |
+| `list_documents` | インデックス済みドキュメントの一覧（パス・チャンク数・インデックス日時・埋め込みモデル） |
+
+### MCP クライアントへの登録
+
+クライアントの設定にサーバーを追加します。Hermes Agent の例
+（`~/.hermes/config.yaml`）:
+
+```yaml
+mcp_servers:
+  lite-rag:
+    command: /home/isekai/lite-rag/dist/lite-rag
+    args: ["mcp", "--config", "/home/isekai/.config/lite-rag/config.toml"]
+    enabled: true
+    timeout: 120
+```
+
+`timeout: 120` を推奨します — `rag_context` は LLM を呼び出すため、回答に時間が
+かかる場合があります。`--config` のパスはインデックス作成時と同じ config
+（同じ DuckDB データベース）を指す必要があります。
+
 ## 環境変数
 
 設定ファイルの各項目は環境変数で上書きできます：

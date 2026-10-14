@@ -66,6 +66,42 @@ by default, so the file explicitly enables the presets v1 applied
 automatically (`comments`, `std-error-handling`, `common-false-positives`,
 `legacy`) — the lint gate behaves the same as before the upgrade.
 
+## MCP Server
+
+`lite-rag` can run as an MCP (Model Context Protocol) server so AI agents can
+query the indexed documents as tools:
+
+```sh
+lite-rag mcp
+```
+
+The server speaks JSON-RPC 2.0 over stdin/stdout (the stdio transport); all
+diagnostics go to stderr. It exposes three tools:
+
+| Tool | Purpose |
+|------|---------|
+| `search_docs` | Semantic search returning raw passages (content, file path, heading path, score) — no LLM call |
+| `rag_context` | Full Q&A: document-grounded answer plus cited sources |
+| `list_documents` | List indexed documents (path, chunks, indexed timestamp, embedding model) |
+
+### Registering with an MCP client
+
+Add the server to the client's configuration. Example for Hermes Agent
+(`~/.hermes/config.yaml`):
+
+```yaml
+mcp_servers:
+  lite-rag:
+    command: /home/isekai/lite-rag/dist/lite-rag
+    args: ["mcp", "--config", "/home/isekai/.config/lite-rag/config.toml"]
+    enabled: true
+    timeout: 120
+```
+
+`timeout: 120` is recommended — `rag_context` calls the LLM and answers can
+take a while. The `--config` path must point at the same config (and therefore
+the same DuckDB database) that was indexed.
+
 ## Git Hook Installation
 
 Git hooks are managed under `scripts/hooks/`. To install them:
