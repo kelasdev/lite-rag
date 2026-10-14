@@ -67,14 +67,30 @@ Tool handlers know nothing about DuckDB or HTTP — they only see `*rag.Engine`.
 ### 4.2 `internal/rag` — shared pipeline (extraction from `ask.go`)
 
 ```go
-type Engine struct {
-    db        *database.DB
-    client    *llm.SplitClient      // chat + embed endpoints
-    retriever *retriever.Retriever
-    Progress  io.Writer             // nil-safe; io.Discard in MCP mode
+// Narrow subsets of the concrete types — the Engine is testable without a
+// real DuckDB connection or LLM client.
+type DocDB interface {
+    SimilarChunks(query []float32, topK int, embeddingModel string) ([]database.ScoredChunk, error)
+    AdjacentChunks(documentID string, lo, hi int) ([]database.ChunkRow, error)
+    ListDocuments() ([]database.DocumentRecord, error)
 }
 
-func NewEngine(cfg *config.Config, db *database.DB) *Engine
+type LLM interface {
+    Embed(ctx context.Context, texts []string) ([][]float32, error)
+    Chat(ctx context.Context, messages []llm.Message, w io.Writer) error
+    RewriteQuery(ctx context.Context, query string) ([]string, error)
+}
+
+type Engine struct {
+    db             DocDB
+    llm            LLM
+    rewriter       retriever.QueryRewriter // nil = query rewriting disabled
+    embeddingModel string
+    retrievalCfg   config.RetrievalConfig
+    Progress       io.Writer              // nil-safe; io.Discard in MCP mode
+}
+
+func NewEngine(db DocDB, client LLM, cfg *config.Config) *Engine
 
 // Search: retrieval only. topK <= 0 uses the configured default.
 func (e *Engine) Search(ctx context.Context, query string, topK int) ([]retriever.Passage, error)
@@ -88,9 +104,11 @@ func (e *Engine) ListDocuments() ([]database.DocumentRecord, error)
 ```
 
 The nonce-protected context block and message construction move from `runAsk`
-into `Engine.Ask`. `cmd/lite-rag/ask.go` is refactored to call `Engine.Ask` —
-**CLI behavior must not change** (streaming to stdout in text mode, buffering in
-`--json` mode, identical source output).
+into `Engine.Ask`. The Engine holds no mutable per-request state: a
+`retriever` is constructed per call, so a `top_k` override on one request
+cannot leak into the next. `cmd/lite-rag/ask.go` is refactored to call
+`Engine.Ask` — **CLI behavior must not change** (streaming to stdout in text
+mode, buffering in `--json` mode, identical source output).
 
 ### 4.3 `internal/mcpserver` — tool registration
 
@@ -130,8 +148,12 @@ nonce-tagged context block → `client.Chat` (SSE to the LLM endpoint, buffered)
 - Tool failures (DB error, LLM error) → returned as Go errors → the SDK converts
   them to `CallToolResult` with `IsError` and the message
 - `search_docs` with no hits → **empty passages list**, not an error
-- `rag_context` with no passages → the model's "not contained in documents"
-  answer with empty `sources` (same semantics as the CLI)
+- `rag_context` with no passages → a canned "No relevant documents found in
+  the indexed documents." message with empty `sources`, **without calling the
+  LLM** (the engine returns nil passages and `Ask` skips the chat call). The
+  no-documents condition is keyed on the passage list, not the answer string:
+  an empty LLM completion with passages found still returns the (empty) answer
+  plus its sources rather than the canned message
 - Config/DB startup failure → command exits non-zero before the transport starts
 
 ---
@@ -166,7 +188,7 @@ Both documented in `docs/en/dependencies.md` per RULES.md Rule 18.
 - Fakes: `DBReader`/`ListDocuments` fake, fake `Embedder`, fake `Completer`
 - Coverage: each tool's happy path + error paths (DB error, empty results)
 
-**End-to-end (`internal/mcpserver`)**
+**End-to-end (`cmd/lite-rag/mcp_e2e_test.go`)**
 - Temp DuckDB + local fake LLM HTTP server (OpenAI-compatible SSE)
 - Spawn the real `lite-rag mcp` binary via the SDK's `CommandTransport`
 - Handshake `initialize` → `tools/list` → `tools/call` for all three tools

@@ -266,6 +266,38 @@ func TestRagContext_NoDocuments(t *testing.T) {
 	}
 }
 
+func TestRagContext_EmptyAnswerWithSources(t *testing.T) {
+	// A provider whose completion yields no content (usage-only finish,
+	// refusal) must NOT be reported as "no documents" while passages —
+	// and therefore sources — exist.
+	session := newTestServer(t, indexedDB(), &fakeLLM{chatAnswer: ""})
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "rag_context",
+		Arguments: map[string]any{"question": "what is the answer?"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %s", toolText(t, res))
+	}
+	var out struct {
+		Answer  string `json:"answer"`
+		Sources []struct {
+			FilePath string `json:"file_path"`
+		} `json:"sources"`
+	}
+	if err := json.Unmarshal([]byte(toolText(t, res)), &out); err != nil {
+		t.Fatalf("unmarshal: %v (raw: %s)", err, toolText(t, res))
+	}
+	if out.Answer == "No relevant documents found in the indexed documents." {
+		t.Error("empty LLM completion with passages found must not claim 'no documents'")
+	}
+	if len(out.Sources) != 1 || out.Sources[0].FilePath != "docs/a.md" {
+		t.Errorf("sources must be returned when passages were found, got %+v", out.Sources)
+	}
+}
+
 func TestRagContext_UnicodeAnswer(t *testing.T) {
 	session := newTestServer(t, indexedDB(), &fakeLLM{chatAnswer: "日本語の回答です。"})
 	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{

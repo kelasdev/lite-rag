@@ -107,7 +107,11 @@ func ragContext(engine *rag.Engine) func(context.Context, *mcp.CallToolRequest, 
 		if err != nil {
 			return nil, nil, fmt.Errorf("rag_context: %w", err)
 		}
-		if answer == "" {
+		// An empty answer with passages found (usage-only completion,
+		// refusal) is not "no documents" — only a nil passage list is.
+		// Branching on the answer string would misreport it while still
+		// citing sources.
+		if len(passages) == 0 {
 			answer = "No relevant documents found in the indexed documents."
 		}
 		out := askOut{Answer: answer, Sources: make([]sourceJSON, 0)}

@@ -68,14 +68,30 @@ lite-rag の RAG パイプラインを **MCP (Model Context Protocol) サーバ�
 ### 4.2 `internal/rag` — 共通パイプライン（`ask.go` から抽出）
 
 ```go
-type Engine struct {
-    db        *database.DB
-    client    *llm.SplitClient      // chat + embed エンドポイント
-    retriever *retriever.Retriever
-    Progress  io.Writer             // nil 安全。MCP モードでは io.Discard
+// 具象型の狭いサブセット — Engine は実 DuckDB 接続や LLM クライアント
+// なしでテスト可能。
+type DocDB interface {
+    SimilarChunks(query []float32, topK int, embeddingModel string) ([]database.ScoredChunk, error)
+    AdjacentChunks(documentID string, lo, hi int) ([]database.ChunkRow, error)
+    ListDocuments() ([]database.DocumentRecord, error)
 }
 
-func NewEngine(cfg *config.Config, db *database.DB) *Engine
+type LLM interface {
+    Embed(ctx context.Context, texts []string) ([][]float32, error)
+    Chat(ctx context.Context, messages []llm.Message, w io.Writer) error
+    RewriteQuery(ctx context.Context, query string) ([]string, error)
+}
+
+type Engine struct {
+    db             DocDB
+    llm            LLM
+    rewriter       retriever.QueryRewriter // nil = クエリ書き換え無効
+    embeddingModel string
+    retrievalCfg   config.RetrievalConfig
+    Progress       io.Writer              // nil 安全。MCP モードでは io.Discard
+}
+
+func NewEngine(db DocDB, client LLM, cfg *config.Config) *Engine
 
 // Search: 検索のみ。topK <= 0 なら設定値を使用。
 func (e *Engine) Search(ctx context.Context, query string, topK int) ([]retriever.Passage, error)
@@ -89,6 +105,8 @@ func (e *Engine) ListDocuments() ([]database.DocumentRecord, error)
 ```
 
 nonce タグ付きコンテキストブロックとメッセージ構築は `runAsk` から `Engine.Ask` へ移動する。
+Engine はリクエストごとの可変状態を持たない — `retriever` は呼出ごとに構築されるため、
+あるリクエストの `top_k` オーバーライドが次へ漏れることはない。
 `cmd/lite-rag/ask.go` は `Engine.Ask` を呼ぶようリファクタされる —
 **CLI の挙動は変えてはいけない**（テキストモードでは stdout へストリーミング、
 `--json` モードではバッファ、ソース出力も同一）。
@@ -131,8 +149,12 @@ nonce タグ付きコンテキストブロックとメッセージ構築は `run
 - ツール失敗（DB エラー、LLM エラー）→ Go の error として返却 → SDK が
   `IsError` 付き `CallToolResult` に変換
 - `search_docs` で 0 件 → **空のパッセージリスト**。エラーではない
-- `rag_context` でパッセージなし → モデルの「ドキュメントに含まれていません」
-  回答 + 空の `sources`（CLI と同じセマンティクス）
+- `rag_context` でパッセージなし → 定型文「No relevant documents found in
+  the indexed documents.」+ 空の `sources`。**LLM は呼ばれない**
+  （engine は nil パッセージを返し `Ask` はチャット呼出をスキップする）。
+  「ドキュメントなし」の判定は回答文字列ではなくパッセージリストを基準とする:
+  パッセージは見つかったが LLM の完了が空だった場合も、定型文ではなく
+  （空の）回答 + ソースを返す
 - config/DB の起動失敗 → トランスポート開始前に非ゼロ終了
 
 ---
@@ -167,7 +189,7 @@ MCP `tools/call` は単一のリクエスト/レスポンスであり、部分�
 - フェイク: `DBReader`/`ListDocuments` フェイク、`Embedder` フェイク、`Completer` フェイク
 - カバレッジ: 各ツールの正常系 + エラー系（DB エラー、空結果）
 
-**エンドツーエンド（`internal/mcpserver`）**
+**エンドツーエンド（`cmd/lite-rag/mcp_e2e_test.go`）**
 - 一時 DuckDB + ローカルの偽 LLM HTTP サーバー（OpenAI 互換 SSE）
 - SDK の `CommandTransport` で実バイナリ `lite-rag mcp` を起動
 - `initialize` → `tools/list` → `tools/call` のハンドシェイクを 3 ツール全てで検証
