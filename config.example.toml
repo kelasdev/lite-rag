@@ -40,6 +40,14 @@ path = "./lite-rag.db"
 # Number of vector search hits to retrieve per query.
 top_k = 5
 
+# Minimum cosine similarity for a hit to become a candidate passage.
+# Queries unrelated to the corpus still land 0.55-0.71 on a topically tight
+# index, so without this gate every question returns top_k candidates.
+# 0 disables filtering. Retrieval scores alone cannot separate related-but-
+# irrelevant from on-topic (the gap can be 0.005), so anything that survives
+# this gate is judged by a cheap relevance check before an answer is generated.
+min_score = 0.60
+
 # Number of adjacent chunks (before and after each hit) to include for context.
 # Set to 0 to return bare hit chunks without expansion.
 context_window = 1

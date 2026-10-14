@@ -38,6 +38,7 @@ top_k          = 10
 context_window = 2
 chunk_size     = 256
 chunk_overlap  = 32
+min_score      = 0.8
 `
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
@@ -58,6 +59,19 @@ chunk_overlap  = 32
 	}
 	if cfg.Retrieval.ContextWindow != 2 {
 		t.Errorf("ContextWindow = %d", cfg.Retrieval.ContextWindow)
+	}
+	if cfg.Retrieval.MinScore != 0.8 {
+		t.Errorf("MinScore = %v, want 0.8", cfg.Retrieval.MinScore)
+	}
+}
+
+func TestMinScoreDefault(t *testing.T) {
+	cfg, err := config.Load("/nonexistent/config.toml")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Retrieval.MinScore != 0.60 {
+		t.Errorf("MinScore = %v, want default 0.60", cfg.Retrieval.MinScore)
 	}
 }
 

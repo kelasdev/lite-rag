@@ -68,7 +68,61 @@ func cfg(topK, window int) config.RetrievalConfig {
 	return config.RetrievalConfig{TopK: topK, ContextWindow: window, ChunkSize: 512, ChunkOverlap: 64}
 }
 
+func cfgMin(topK, window int, minScore float32) config.RetrievalConfig {
+	c := cfg(topK, window)
+	c.MinScore = minScore
+	return c
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
+
+// TestRetrieve_FiltersBelowMinScore: hits scoring below min_score never
+// become passages — a 0.65 hit on an off-topic query is noise.
+func TestRetrieve_FiltersBelowMinScore(t *testing.T) {
+	db := openDB(t)
+	insertDoc(t, db, "d1", "/doc1.md", []database.ChunkRow{
+		{ID: "c0", DocumentID: "d1", ChunkIndex: 0, Content: "alpha", Embedding: []float32{1, 0, 0}},
+		{ID: "c1", DocumentID: "d1", ChunkIndex: 1, Content: "beta", Embedding: []float32{0, 1, 0}},
+		{ID: "c2", DocumentID: "d1", ChunkIndex: 2, Content: "gamma", Embedding: []float32{0, 0, 1}},
+	})
+
+	// Query vector matches chunk 0 exactly; chunks 1 and 2 are orthogonal.
+	emb := &mockEmbedder{vec: []float32{1, 0, 0}}
+	ret := retriever.New(db, emb, nil, "test-model", cfgMin(3, 0, 0.5))
+
+	passages, err := ret.Retrieve(context.Background(), "query")
+	if err != nil {
+		t.Fatalf("Retrieve: %v", err)
+	}
+	if len(passages) != 1 {
+		t.Fatalf("want 1 passage above min_score, got %d", len(passages))
+	}
+	if passages[0].Score < 0.5 {
+		t.Errorf("passage score %v below min_score 0.5", passages[0].Score)
+	}
+}
+
+// TestRetrieve_AllBelowMinScoreReturnsNil: when every hit is below min_score
+// the retriever reports no candidates at all — no LLM call, no sources.
+func TestRetrieve_AllBelowMinScoreReturnsNil(t *testing.T) {
+	db := openDB(t)
+	insertDoc(t, db, "d1", "/doc1.md", []database.ChunkRow{
+		{ID: "c0", DocumentID: "d1", ChunkIndex: 0, Content: "alpha", Embedding: []float32{0, 1, 0}},
+		{ID: "c1", DocumentID: "d1", ChunkIndex: 1, Content: "beta", Embedding: []float32{0, 0, 1}},
+	})
+
+	// Query is orthogonal to every chunk — every hit scores 0.
+	emb := &mockEmbedder{vec: []float32{1, 0, 0}}
+	ret := retriever.New(db, emb, nil, "test-model", cfgMin(3, 0, 0.5))
+
+	passages, err := ret.Retrieve(context.Background(), "query")
+	if err != nil {
+		t.Fatalf("Retrieve: %v", err)
+	}
+	if passages != nil {
+		t.Errorf("want nil passages when all hits are below min_score, got %d", len(passages))
+	}
+}
 
 func TestRetrieve_ReturnsTopPassage(t *testing.T) {
 	db := openDB(t)

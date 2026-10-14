@@ -110,8 +110,10 @@ func ragContext(engine *rag.Engine) func(context.Context, *mcp.CallToolRequest, 
 		// An empty answer with passages found (usage-only completion,
 		// refusal) is not "no documents" — only a nil passage list is.
 		// Branching on the answer string would misreport it while still
-		// citing sources.
-		if len(passages) == 0 {
+		// citing sources. A judge rejection returns the engine's own
+		// translated fallback with passages already suppressed, so the
+		// canned message applies only when the LLM was never called.
+		if answer == "" && len(passages) == 0 {
 			answer = "No relevant documents found in the indexed documents."
 		}
 		out := askOut{Answer: answer, Sources: make([]sourceJSON, 0)}

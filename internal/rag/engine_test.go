@@ -1,6 +1,7 @@
 package rag
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -47,9 +48,12 @@ func (f *fakeDB) ListDocuments() ([]database.DocumentRecord, error) {
 }
 
 type fakeLLM struct {
-	chatAnswer string
-	chatErr    error
-	messages   []llm.Message // captured on last Chat call
+	chatAnswer  string
+	judgeAnswer string
+	judgeErr    error
+	chatErr     error
+	messages    []llm.Message // captured on last Chat call
+	chatCalls   int           // generation calls (relevance-judge calls excluded)
 }
 
 func (f *fakeLLM) Embed(ctx context.Context, texts []string) ([][]float32, error) {
@@ -62,6 +66,14 @@ func (f *fakeLLM) Embed(ctx context.Context, texts []string) ([][]float32, error
 
 func (f *fakeLLM) Chat(ctx context.Context, messages []llm.Message, w io.Writer) error {
 	f.messages = messages
+	if strings.Contains(messages[0].Content, "relevance judge") {
+		if f.judgeErr != nil {
+			return f.judgeErr
+		}
+		_, err := io.WriteString(w, f.judgeAnswer)
+		return err
+	}
+	f.chatCalls++
 	if f.chatErr != nil {
 		return f.chatErr
 	}
@@ -301,11 +313,91 @@ func TestAsk_NonceTagsWrapContext(t *testing.T) {
 	}
 }
 
+// TestAsk_JudgeRejects: retrieval scores cannot separate related-but-
+// irrelevant from on-topic on a tight corpus (off-topic 0.713 vs on-topic
+// 0.718 in the user's index), so a cheap relevance judge decides before
+// generation. NO → the judge's translated fallback, no sources, and the
+// generation call is skipped entirely.
+func TestAsk_JudgeRejects(t *testing.T) {
+	db := &fakeDB{
+		chunks:   []database.ScoredChunk{{ChunkRow: database.ChunkRow{ID: "c1", DocumentID: "d1", ChunkIndex: 0, Content: "content"}, Score: 0.71, FilePath: "a.md"}},
+		adjacent: []database.ChunkRow{{ChunkIndex: 0, Content: "content"}},
+	}
+	llmFake := &fakeLLM{
+		judgeAnswer: "NO Dokumen tidak mengandungi maklumat untuk menjawab soalan ini.",
+		chatAnswer:  "must not be generated",
+	}
+	engine := testEngine(db, llmFake)
+	var buf bytes.Buffer
+	answer, passages, err := engine.Ask(context.Background(), "siapakah ASEP", &buf)
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if answer != "Dokumen tidak mengandungi maklumat untuk menjawab soalan ini." {
+		t.Errorf("answer = %q, want the judge's translated fallback", answer)
+	}
+	if passages != nil {
+		t.Errorf("sources must be suppressed on a no-answer, got %d passages", len(passages))
+	}
+	if llmFake.chatCalls != 0 {
+		t.Error("generation must be skipped when the judge rejects")
+	}
+	if buf.String() != answer+"\n" {
+		t.Errorf("fallback must be written to w, got %q", buf.String())
+	}
+}
+
+// TestAsk_JudgeAccepts: a YES judgment runs generation normally.
+func TestAsk_JudgeAccepts(t *testing.T) {
+	db := &fakeDB{
+		chunks:   []database.ScoredChunk{{ChunkRow: database.ChunkRow{ID: "c1", DocumentID: "d1", ChunkIndex: 0, Content: "content"}, Score: 0.9, FilePath: "a.md"}},
+		adjacent: []database.ChunkRow{{ChunkIndex: 0, Content: "content"}},
+	}
+	llmFake := &fakeLLM{judgeAnswer: "YES", chatAnswer: "real answer"}
+	engine := testEngine(db, llmFake)
+	answer, passages, err := engine.Ask(context.Background(), "q", io.Discard)
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if llmFake.chatCalls != 1 {
+		t.Errorf("generation must run when the judge accepts, got %d calls", llmFake.chatCalls)
+	}
+	if answer != "real answer" {
+		t.Errorf("answer = %q, want the generated answer", answer)
+	}
+	if len(passages) != 1 {
+		t.Errorf("passages must be returned with a real answer, got %d", len(passages))
+	}
+}
+
+// TestAsk_JudgeErrorFailsOpen: a judge failure must not break the ask —
+// generation proceeds as if no judge existed.
+func TestAsk_JudgeErrorFailsOpen(t *testing.T) {
+	db := &fakeDB{
+		chunks:   []database.ScoredChunk{{ChunkRow: database.ChunkRow{ID: "c1", DocumentID: "d1", ChunkIndex: 0, Content: "content"}, Score: 0.9, FilePath: "a.md"}},
+		adjacent: []database.ChunkRow{{ChunkIndex: 0, Content: "content"}},
+	}
+	llmFake := &fakeLLM{judgeErr: errors.New("judge down"), chatAnswer: "real answer"}
+	engine := testEngine(db, llmFake)
+	answer, passages, err := engine.Ask(context.Background(), "q", io.Discard)
+	if err != nil {
+		t.Fatalf("judge failure must not fail the ask: %v", err)
+	}
+	if answer != "real answer" {
+		t.Errorf("answer = %q, want the generated answer", answer)
+	}
+	if llmFake.chatCalls != 1 {
+		t.Errorf("generation must run when the judge fails, got %d calls", llmFake.chatCalls)
+	}
+	if len(passages) != 1 {
+		t.Errorf("passages must be returned, got %d", len(passages))
+	}
+}
+
 // TestBuildMessages_PromptRules pins the RAG answer-quality rules: the model
-// must answer in the question's language, must synthesize from related
-// context before bailing, and must emit the fallback alone (never appended
-// after a real answer — that produced contradictory "answer + Japanese
-// refusal" output).
+// must answer in the question's language and synthesize related context
+// before concluding; the no-answer decision itself belongs to the relevance
+// judge, not to a fixed foreign-language fallback string.
 func TestBuildMessages_PromptRules(t *testing.T) {
 	passages := []retriever.Passage{{FilePath: "a.md", Content: "content about widgets", Score: 0.9}}
 	sys := buildMessages("apa itu jailbreak", passages)[0].Content
@@ -314,12 +406,20 @@ func TestBuildMessages_PromptRules(t *testing.T) {
 		t.Error("system prompt must instruct answering in the question's language")
 	}
 	if !strings.Contains(sys, "related information but no direct answer") {
-		t.Error("system prompt must instruct best-effort synthesis before the fallback")
-	}
-	if !strings.Contains(sys, "and nothing else") {
-		t.Error("fallback rule must forbid appending it after an answer")
+		t.Error("system prompt must instruct best-effort synthesis before concluding")
 	}
 	if strings.Contains(sys, "この質問に答える情報はドキュメントに含まれていません。") {
 		t.Error("system prompt must not mandate a fixed Japanese fallback string")
+	}
+
+	judge := buildJudgeMessages("apa itu jailbreak", passages)[0].Content
+	if !strings.Contains(judge, "relevance judge") {
+		t.Error("judge prompt must identify itself as a relevance judge")
+	}
+	if !strings.Contains(judge, "exactly YES") {
+		t.Error("judge prompt must contract for an exact YES answer")
+	}
+	if !strings.Contains(judge, "<context-") {
+		t.Error("judge context must be nonce-tagged like generation")
 	}
 }

@@ -46,7 +46,8 @@ func (f *fakeDB) ListDocuments() ([]database.DocumentRecord, error) {
 }
 
 type fakeLLM struct {
-	chatAnswer string
+	chatAnswer  string
+	judgeAnswer string
 }
 
 func (f *fakeLLM) Embed(ctx context.Context, texts []string) ([][]float32, error) {
@@ -58,6 +59,10 @@ func (f *fakeLLM) Embed(ctx context.Context, texts []string) ([][]float32, error
 }
 
 func (f *fakeLLM) Chat(ctx context.Context, messages []llm.Message, w io.Writer) error {
+	if strings.Contains(messages[0].Content, "relevance judge") {
+		_, err := io.WriteString(w, f.judgeAnswer)
+		return err
+	}
 	_, err := io.WriteString(w, f.chatAnswer)
 	return err
 }
@@ -295,6 +300,42 @@ func TestRagContext_EmptyAnswerWithSources(t *testing.T) {
 	}
 	if len(out.Sources) != 1 || out.Sources[0].FilePath != "docs/a.md" {
 		t.Errorf("sources must be returned when passages were found, got %+v", out.Sources)
+	}
+}
+
+// TestRagContext_JudgeRejectsKeepsEngineFallback: when the engine's judge
+// rejects (translated answer set, passages suppressed), the handler must not
+// overwrite the answer with the canned English message, and sources must
+// stay empty — a no-answer must never carry citations.
+func TestRagContext_JudgeRejectsKeepsEngineFallback(t *testing.T) {
+	session := newTestServer(t, indexedDB(), &fakeLLM{
+		judgeAnswer: "NO Tidak ada dalam dokumen.",
+		chatAnswer:  "must not be generated",
+	})
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "rag_context",
+		Arguments: map[string]any{"question": "siapakah ASEP"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %s", toolText(t, res))
+	}
+	var out struct {
+		Answer  string `json:"answer"`
+		Sources []struct {
+			FilePath string `json:"file_path"`
+		} `json:"sources"`
+	}
+	if err := json.Unmarshal([]byte(toolText(t, res)), &out); err != nil {
+		t.Fatalf("unmarshal: %v (raw: %s)", err, toolText(t, res))
+	}
+	if out.Answer != "Tidak ada dalam dokumen." {
+		t.Errorf("answer = %q, want the engine's translated fallback", out.Answer)
+	}
+	if len(out.Sources) != 0 {
+		t.Errorf("sources must be empty on a no-answer, got %+v", out.Sources)
 	}
 }
 

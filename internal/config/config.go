@@ -70,11 +70,12 @@ type DatabaseConfig struct {
 
 // RetrievalConfig controls chunking and retrieval behaviour.
 type RetrievalConfig struct {
-	TopK          int  `toml:"top_k"`
-	ContextWindow int  `toml:"context_window"`
-	ChunkSize     int  `toml:"chunk_size"`
-	ChunkOverlap  int  `toml:"chunk_overlap"`
-	QueryRewrite  bool `toml:"query_rewrite"`
+	TopK          int     `toml:"top_k"`
+	ContextWindow int     `toml:"context_window"`
+	ChunkSize     int     `toml:"chunk_size"`
+	ChunkOverlap  int     `toml:"chunk_overlap"`
+	QueryRewrite  bool    `toml:"query_rewrite"`
+	MinScore      float32 `toml:"min_score"`
 }
 
 // defaults returns a Config populated with sensible defaults.
@@ -96,6 +97,7 @@ func defaults() Config {
 			ContextWindow: 1,
 			ChunkSize:     512,
 			ChunkOverlap:  64,
+			MinScore:      0.60,
 		},
 		Server: ServerConfig{
 			Addr:     "127.0.0.1:8080",

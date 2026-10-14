@@ -51,6 +51,7 @@ type Retriever struct {
 	rewriter       QueryRewriter // nil = disabled
 	topK           int
 	contextWindow  int
+	minScore       float32
 	embeddingModel string
 }
 
@@ -65,6 +66,7 @@ func New(db DBReader, emb Embedder, rewriter QueryRewriter, embeddingModel strin
 		rewriter:       rewriter,
 		topK:           cfg.TopK,
 		contextWindow:  cfg.ContextWindow,
+		minScore:       cfg.MinScore,
 		embeddingModel: embeddingModel,
 	}
 }
@@ -86,7 +88,28 @@ func (r *Retriever) Retrieve(ctx context.Context, query string) ([]Passage, erro
 	if len(hits) == 0 {
 		return nil, nil
 	}
+	hits = filterBelowMinScore(hits, r.minScore)
+	if len(hits) == 0 {
+		return nil, nil
+	}
 	return r.expand(hits)
+}
+
+// filterBelowMinScore drops chunks scoring below minScore. On a tight corpus
+// even unrelated queries land 0.55-0.71, so without this gate every question
+// returns top_k candidates no matter how irrelevant. minScore <= 0 disables
+// filtering (every hit is a candidate).
+func filterBelowMinScore(hits []database.ScoredChunk, minScore float32) []database.ScoredChunk {
+	if minScore <= 0 {
+		return hits
+	}
+	out := make([]database.ScoredChunk, 0, len(hits))
+	for _, h := range hits {
+		if h.Score >= minScore {
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 // search runs concurrent vector searches for the original query and any rewritten
