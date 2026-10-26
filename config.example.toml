@@ -53,6 +53,22 @@ lock_timeout_ms = 10000
 # Number of vector search hits to retrieve per query.
 top_k = 5
 
+# Fuse vector similarity with keyword matches (file path, heading, content) so a
+# document whose name matches the query is not outranked by generic text that
+# merely embeds nearby. Set false for pure vector search.
+hybrid = true
+
+# Vector and keyword candidates gathered per query before fusion truncates the
+# list to top_k.
+candidate_k = 50
+
+# Strength of the keyword boost: score = cos + lexical_weight * lex * (1 - cos).
+lexical_weight = 0.5
+
+# Keyword match score (0..1) that admits a chunk whose cosine is below
+# min_score. Path match = 0.8, heading = 0.6, content = 0.25.
+lexical_min = 0.5
+
 # Minimum cosine similarity for a hit to become a candidate passage.
 # Queries unrelated to the corpus still land 0.55-0.71 on a topically tight
 # index, so without this gate every question returns top_k candidates.

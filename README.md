@@ -24,6 +24,9 @@ mixed-script token estimation.
   chunking, mixed CJK/ASCII token estimation.
 - **Context window expansion**: each vector-search hit is expanded by ±N adjacent chunks
   for continuity; overlapping spans are deduplicated automatically.
+- **Hybrid retrieval**: keyword matches in file paths, headings, and content are fused
+  with vector similarity, so a document named after the query is not outranked by
+  generic text that merely embeds nearby.
 
 ---
 
@@ -94,6 +97,8 @@ lock_timeout_ms = 10000  # other commands wait this long for the lock
 
 [retrieval]
 top_k          = 5     # vector search hits
+hybrid         = true  # fuse keyword matches (path/heading/content) with vectors
+candidate_k    = 50    # vector + keyword candidates before fusion
 context_window = 1     # adjacent chunks to expand around each hit
 chunk_size     = 512
 chunk_overlap  = 64

@@ -102,6 +102,23 @@ type RetrievalConfig struct {
 	ChunkOverlap  int     `toml:"chunk_overlap"`
 	QueryRewrite  bool    `toml:"query_rewrite"`
 	MinScore      float32 `toml:"min_score"`
+
+	// Hybrid enables keyword-aware retrieval: vector candidates are fused with
+	// chunks whose path, heading, or content contains a query term. See
+	// architecture §3.3.3.
+	Hybrid bool `toml:"hybrid"`
+
+	// CandidateK is how many vector and keyword candidates are gathered before
+	// fusion truncates the list to top_k.
+	CandidateK int `toml:"candidate_k"`
+
+	// LexicalWeight scales the keyword boost applied on top of cosine
+	// similarity: score = cos + weight*lex*(1-cos).
+	LexicalWeight float32 `toml:"lexical_weight"`
+
+	// LexicalMin is the keyword match score (0..1) that admits a chunk even
+	// when its cosine similarity is below min_score.
+	LexicalMin float32 `toml:"lexical_min"`
 }
 
 // defaults returns a Config populated with sensible defaults.
@@ -126,6 +143,10 @@ func defaults() Config {
 			ChunkSize:     512,
 			ChunkOverlap:  64,
 			MinScore:      0.60,
+			Hybrid:        true,
+			CandidateK:    50,
+			LexicalWeight: 0.5,
+			LexicalMin:    0.5,
 		},
 		Server: ServerConfig{
 			Addr:     "127.0.0.1:8080",

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"unicode"
 
 	"lite-rag/internal/config"
 	"lite-rag/internal/database"
@@ -35,10 +36,17 @@ type DBReader interface {
 	AdjacentChunks(documentID string, lo, hi int) ([]database.ChunkRow, error)
 }
 
+// LexicalSearcher is the optional keyword half of hybrid retrieval.
+// database.DB implements it; test doubles may omit it, in which case the
+// Retriever falls back to pure vector search.
+type LexicalSearcher interface {
+	LexicalChunks(query []float32, terms []string, limit int, embeddingModel string) ([]database.ScoredChunk, error)
+}
+
 // Passage is a retrieved, context-expanded text passage ready for LLM consumption.
 type Passage struct {
 	Content     string  // merged content of the expanded window
-	Score       float32 // cosine similarity of the best matching chunk in this window
+	Score       float32 // relevance: cosine, boosted by keyword evidence (see fuseHits)
 	HeadingPath string  // heading hierarchy of the highest-scoring chunk
 	DocumentID  string
 	FilePath    string // source file path of the document
@@ -50,8 +58,12 @@ type Retriever struct {
 	emb            Embedder
 	rewriter       QueryRewriter // nil = disabled
 	topK           int
+	candidateK     int // vector/keyword candidates gathered before fusion
 	contextWindow  int
 	minScore       float32
+	lexicalWeight  float32
+	lexicalMin     float32
+	hybrid         bool
 	embeddingModel string
 }
 
@@ -60,13 +72,24 @@ type Retriever struct {
 // embeddingModel must match the model used during indexing so that vector
 // comparisons are only made between embeddings from the same model.
 func New(db DBReader, emb Embedder, rewriter QueryRewriter, embeddingModel string, cfg config.RetrievalConfig) *Retriever {
+	candidateK := cfg.CandidateK
+	if candidateK <= 0 {
+		candidateK = cfg.TopK
+	}
+	if candidateK < cfg.TopK {
+		candidateK = cfg.TopK
+	}
 	return &Retriever{
 		db:             db,
 		emb:            emb,
 		rewriter:       rewriter,
 		topK:           cfg.TopK,
+		candidateK:     candidateK,
 		contextWindow:  cfg.ContextWindow,
 		minScore:       cfg.MinScore,
+		lexicalWeight:  cfg.LexicalWeight,
+		lexicalMin:     cfg.LexicalMin,
+		hybrid:         cfg.Hybrid,
 		embeddingModel: embeddingModel,
 	}
 }
@@ -81,43 +104,159 @@ func New(db DBReader, emb Embedder, rewriter QueryRewriter, embeddingModel strin
 //
 // Results are merged (max score per chunk ID) before context expansion.
 func (r *Retriever) Retrieve(ctx context.Context, query string) ([]Passage, error) {
-	hits, err := r.search(ctx, query)
+	hits, texts, queryVec, err := r.search(ctx, query)
 	if err != nil {
 		return nil, err
 	}
-	if len(hits) == 0 {
-		return nil, nil
+
+	var lexical []database.ScoredChunk
+	if r.hybrid {
+		lexical, err = r.lexicalHits(queryVec, texts)
+		if err != nil {
+			// Keyword search is an enhancement: a failure (e.g. an old schema)
+			// must not take retrieval down with it.
+			slog.Warn("keyword search failed, using vector hits only", "error", err)
+		}
 	}
-	hits = filterBelowMinScore(hits, r.minScore)
+
+	hits = fuseHits(hits, lexical, r.lexicalWeight, r.minScore, r.lexicalMin, r.topK*max(1, len(texts)))
 	if len(hits) == 0 {
 		return nil, nil
 	}
 	return r.expand(hits)
 }
 
-// filterBelowMinScore drops chunks scoring below minScore. On a tight corpus
-// even unrelated queries land 0.55-0.71, so without this gate every question
-// returns top_k candidates no matter how irrelevant. minScore <= 0 disables
-// filtering (every hit is a candidate).
-func filterBelowMinScore(hits []database.ScoredChunk, minScore float32) []database.ScoredChunk {
-	if minScore <= 0 {
-		return hits
+// lexicalHits runs the keyword half of hybrid retrieval for every query text
+// (the original query plus any rewritten variants). It returns nil when the
+// database does not implement LexicalSearcher or the query has no usable terms.
+func (r *Retriever) lexicalHits(queryVec []float32, texts []string) ([]database.ScoredChunk, error) {
+	searcher, ok := r.db.(LexicalSearcher)
+	if !ok {
+		return nil, nil
 	}
-	out := make([]database.ScoredChunk, 0, len(hits))
-	for _, h := range hits {
-		if h.Score >= minScore {
-			out = append(out, h)
+	terms := lexicalTerms(texts...)
+	if len(terms) == 0 {
+		return nil, nil
+	}
+	return searcher.LexicalChunks(queryVec, terms, r.candidateK, r.embeddingModel)
+}
+
+// fuseHits merges vector hits with keyword hits, applies the admission gate,
+// ranks by a keyword-boosted score, and truncates to limit. limit is top_k per
+// searched query text: each rewritten variant contributes its own top_k, as
+// before hybrid retrieval existed.
+//
+// Gate: a chunk is admitted when its cosine clears minScore, or when it came
+// from keyword search with a match of at least lexicalMin (an exact file-path
+// or heading match carries more evidence than a weak cosine on a large corpus).
+//
+// Score: cos + weight*lex*(1-cos). The lexical signal fills the remaining
+// headroom instead of rescaling the cosine, so a hit with no keyword evidence
+// keeps its cosine score and the result stays in [0, 1].
+func fuseHits(vec, lexical []database.ScoredChunk, weight, minScore, lexicalMin float32, limit int) []database.ScoredChunk {
+	type fusedHit struct {
+		chunk database.ScoredChunk
+		cos   float32
+		lex   float32
+	}
+	byID := make(map[string]*fusedHit, len(vec)+len(lexical))
+	for _, h := range vec {
+		byID[h.ID] = &fusedHit{chunk: h, cos: h.Score}
+	}
+	for _, h := range lexical {
+		if e, ok := byID[h.ID]; ok {
+			e.lex = h.Score
+			continue
 		}
+		// Keyword hits carry their own cosine so they compete on equal terms
+		// with the vector candidates.
+		byID[h.ID] = &fusedHit{chunk: h, lex: h.Score, cos: h.VectorScore}
+	}
+
+	out := make([]database.ScoredChunk, 0, len(byID))
+	for _, e := range byID {
+		admitted := e.cos >= minScore || (e.lex > 0 && e.lex >= lexicalMin)
+		if !admitted {
+			continue
+		}
+		c := e.chunk
+		c.Score = e.cos + weight*e.lex*(1-e.cos)
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Score != out[j].Score {
+			return out[i].Score > out[j].Score
+		}
+		return out[i].ID < out[j].ID // deterministic tie-break
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
 	}
 	return out
 }
 
+// lexicalTerms extracts keyword terms from the query texts: lowercased
+// alphanumeric words of at least three characters, minus a small stopword list,
+// capped at maxLexicalTerms and de-duplicated across texts.
+func lexicalTerms(texts ...string) []string {
+	seen := make(map[string]bool, 8)
+	terms := make([]string, 0, 8)
+	for _, text := range texts {
+		for _, field := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
+			return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+		}) {
+			if len([]rune(field)) < 3 || lexicalStopwords[field] || seen[field] {
+				continue
+			}
+			seen[field] = true
+			terms = append(terms, field)
+			if len(terms) == maxLexicalTerms {
+				return terms
+			}
+		}
+	}
+	return terms
+}
+
+// maxLexicalTerms bounds the generated SQL: one GREATEST arm per term.
+const maxLexicalTerms = 8
+
+// lexicalStopwords are intent words and function words that appear in almost
+// every query and would match unrelated documents. Deliberately small: a rare
+// content word is the signal we want to keep.
+var lexicalStopwords = map[string]bool{
+	// English
+	"the": true, "and": true, "for": true, "with": true, "from": true,
+	"that": true, "this": true, "how": true, "what": true, "why": true,
+	"when": true, "who": true, "are": true, "was": true, "were": true,
+	"you": true, "your": true, "its": true, "into": true, "about": true,
+	"can": true, "could": true, "should": true, "would": true, "does": true,
+	"method": true, "methods": true, "technique": true, "techniques": true,
+	// Indonesian
+	"dan": true, "yang": true, "untuk": true, "dengan": true, "dari": true,
+	"pada": true, "adalah": true, "itu": true, "ini": true, "atau": true,
+	"juga": true, "cara": true, "bagaimana": true, "apa": true, "metode": true,
+	"sebuah": true, "dalam": true,
+}
+
 // search runs concurrent vector searches for the original query and any rewritten
-// variants, then merges the results (max score per chunk ID).
-func (r *Retriever) search(ctx context.Context, query string) ([]database.ScoredChunk, error) {
+// variants, then merges the results (max score per chunk ID). It also returns
+// every query text that was searched, so keyword retrieval can reuse the same
+// terms.
+func (r *Retriever) search(ctx context.Context, query string) ([]database.ScoredChunk, []string, []float32, error) {
 	type searchResult struct {
-		hits []database.ScoredChunk
-		err  error
+		hits  []database.ScoredChunk
+		texts []string
+		vec   []float32
+		err   error
+	}
+
+	// Hybrid retrieval widens the vector pool so a keyword hit can promote a
+	// chunk the vector ranking placed below top_k. Without hybrid the pool is
+	// exactly top_k per search, preserving the previous behaviour.
+	vectorK := r.topK
+	if r.hybrid && r.candidateK > vectorK {
+		vectorK = r.candidateK
 	}
 
 	// Goroutine 1: embed the original query and search immediately.
@@ -128,12 +267,12 @@ func (r *Retriever) search(ctx context.Context, query string) ([]database.Scored
 			origCh <- searchResult{err: fmt.Errorf("embed query: %w", err)}
 			return
 		}
-		hits, err := r.db.SimilarChunks(vecs[0], r.topK, r.embeddingModel)
+		hits, err := r.db.SimilarChunks(vecs[0], vectorK, r.embeddingModel)
 		if err != nil {
 			origCh <- searchResult{err: fmt.Errorf("similar chunks: %w", err)}
 			return
 		}
-		origCh <- searchResult{hits: hits}
+		origCh <- searchResult{hits: hits, texts: []string{query}, vec: vecs[0]}
 	}()
 
 	// Goroutine 2: rewrite the query into variants (e.g. JA + EN), then search
@@ -164,7 +303,7 @@ func (r *Retriever) search(ctx context.Context, query string) ([]database.Scored
 						ch <- varResult{}
 						return
 					}
-					hits, err := r.db.SimilarChunks(vecs[0], r.topK, r.embeddingModel)
+					hits, err := r.db.SimilarChunks(vecs[0], vectorK, r.embeddingModel)
 					if err != nil {
 						slog.Warn("similar chunks (rewritten) failed, skipping", "variant", v, "error", err)
 						ch <- varResult{}
@@ -178,7 +317,7 @@ func (r *Retriever) search(ctx context.Context, query string) ([]database.Scored
 			for _, ch := range varChs {
 				merged = mergeHits(merged, (<-ch).hits)
 			}
-			rewriteCh <- searchResult{hits: merged}
+			rewriteCh <- searchResult{hits: merged, texts: variants}
 		}()
 	} else {
 		rewriteCh <- searchResult{} // disabled — send empty immediately
@@ -186,11 +325,12 @@ func (r *Retriever) search(ctx context.Context, query string) ([]database.Scored
 
 	orig := <-origCh
 	if orig.err != nil {
-		return nil, orig.err
+		return nil, nil, nil, orig.err
 	}
 	rewrite := <-rewriteCh // rewrite errors are non-fatal; already logged above
 
-	return mergeHits(orig.hits, rewrite.hits), nil
+	texts := append(append([]string{}, orig.texts...), rewrite.texts...)
+	return mergeHits(orig.hits, rewrite.hits), texts, orig.vec, nil
 }
 
 // mergeHits combines two ScoredChunk slices, deduplicating by chunk ID and

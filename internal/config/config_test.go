@@ -133,6 +133,53 @@ func TestDatabaseAccessEnvOverride(t *testing.T) {
 	}
 }
 
+func TestRetrievalHybridDefaults(t *testing.T) {
+	cfg, err := config.Load("/nonexistent/config.toml")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.Retrieval.Hybrid {
+		t.Error("Hybrid = false, want default true")
+	}
+	if cfg.Retrieval.CandidateK != 50 {
+		t.Errorf("CandidateK = %d, want 50", cfg.Retrieval.CandidateK)
+	}
+	if cfg.Retrieval.LexicalWeight != 0.5 {
+		t.Errorf("LexicalWeight = %v, want 0.5", cfg.Retrieval.LexicalWeight)
+	}
+	if cfg.Retrieval.LexicalMin != 0.5 {
+		t.Errorf("LexicalMin = %v, want 0.5", cfg.Retrieval.LexicalMin)
+	}
+}
+
+// TestRetrievalHybridOverride proves an explicit false in the TOML file wins
+// over the default, so users can opt out of keyword fusion.
+func TestRetrievalHybridOverride(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	body := "[retrieval]\nhybrid = false\ncandidate_k = 12\nlexical_weight = 0.25\nlexical_min = 0.7\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Retrieval.Hybrid {
+		t.Error("Hybrid = true, want false from config file")
+	}
+	if cfg.Retrieval.CandidateK != 12 {
+		t.Errorf("CandidateK = %d, want 12", cfg.Retrieval.CandidateK)
+	}
+	if cfg.Retrieval.LexicalWeight != 0.25 {
+		t.Errorf("LexicalWeight = %v, want 0.25", cfg.Retrieval.LexicalWeight)
+	}
+	if cfg.Retrieval.LexicalMin != 0.7 {
+		t.Errorf("LexicalMin = %v, want 0.7", cfg.Retrieval.LexicalMin)
+	}
+}
+
 func TestInvalidTOML(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bad.toml")

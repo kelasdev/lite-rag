@@ -92,10 +92,12 @@ Responsibilities:
 2. Optionally rewrite the query into multilingual variants via the LLM (see §3.3.2).
 3. Call the embedding API to get the query vector(s).
 4. Execute cosine-similarity searches against all stored chunk vectors in DuckDB.
-5. Merge results from all searches (max score per chunk ID).
-6. For each hit, expand the result window by fetching adjacent chunks from the same
+5. Run a keyword search and fuse it with the vector hits: `cos + w*lex*(1-cos)`
+   (see §3.3.3).
+6. Merge results from all searches (max score per chunk ID).
+7. For each hit, expand the result window by fetching adjacent chunks from the same
    document (see §3.3.1).
-7. Return the enriched chunks as the context for LLM prompt construction.
+8. Return the enriched chunks as the context for LLM prompt construction.
 
 Vector similarity search is implemented as a DuckDB SQL query using the built-in
 `list_cosine_similarity` function, which operates on `FLOAT[]` columns natively.
@@ -178,6 +180,55 @@ If the rewrite LLM call fails, only the original query is searched (non-fatal fa
 ```toml
 [retrieval]
 query_rewrite = true   # default: false
+```
+
+#### 3.3.3 Hybrid Retrieval (Vector + Keyword)
+
+Vector search alone is not enough on a large, heterogeneous collection. With a
+768-dimension "nano" embedding model and ~10 000 chunks, a corpus of security
+notes scored 0.66–0.70 for almost any security-flavoured query, while the
+document literally titled `Jailbreaking-Master-Guide` ranked 6th–19th. With
+`top_k = 5` it never reached the LLM, and the relevance judge — correctly, given
+the passages it saw — answered "the documents do not contain information".
+
+Hybrid retrieval adds a keyword signal:
+
+1. Extract 3+-character terms from the original query and any rewritten
+   variants, dropping a small stopword list (`cara`, `metode`, `how`, `method`, …).
+2. Run the vector search over `candidate_k` chunks per query text **and** a
+   keyword search over path, heading, and content (`database.LexicalChunks`).
+3. Fuse per chunk ID: `score = cos + lexical_weight * lex * (1 - cos)`, where
+   `lex` is 0.8 for a file-path match, 0.6 for a heading match, 0.25 for a
+   content match. A chunk with no keyword evidence keeps its cosine score, and
+   the result stays in `[0, 1]`.
+4. Admit a chunk when `cos >= min_score` **or** `lex >= lexical_min`, so an
+   exact path match survives even when its cosine sits under the gate.
+5. Truncate to `top_k` per searched query text, then expand the context window.
+
+The keyword search runs in the same SQL query that yields the cosine, so fusion
+costs one extra index-less scan over ~10 000 rows (a few milliseconds):
+
+```sql
+SELECT c.id, ..., GREATEST(<per-term path/heading/content arms>) AS lex,
+       list_cosine_similarity(c.embedding, ?) AS cos, d.file_path
+FROM   chunks c JOIN documents d ON d.id = c.document_id
+WHERE  d.embedding_model = ?
+  AND  (lower(d.file_path) LIKE ? ESCAPE '\' OR lower(c.heading_path) LIKE ? ... )
+ORDER  BY lex DESC, cos DESC
+LIMIT  ?
+```
+
+Keyword search is an enhancement: if it fails, retrieval logs a warning and
+continues with vector hits. Set `hybrid = false` for the previous behaviour.
+
+**Configuration:**
+
+```toml
+[retrieval]
+hybrid         = true   # default: true
+candidate_k    = 50     # vector and keyword candidates before fusion
+lexical_weight = 0.5    # strength of the keyword boost
+lexical_min    = 0.5    # keyword score that bypasses min_score
 ```
 
 ### 3.4 LLM Client (`internal/llm/`)

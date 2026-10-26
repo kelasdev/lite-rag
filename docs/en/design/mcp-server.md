@@ -135,8 +135,9 @@ mode, buffering in `--json` mode, identical source output).
 
 ## 6. Data Flow
 
-**`search_docs`** — `query` → `Engine.Search` → embed → `SimilarChunks` →
-context expansion → passages (sorted by score) → JSON result.
+**`search_docs`** — `query` → `Engine.Search` → embed → vector and keyword
+candidates fused (§3.3.3) → context expansion → passages (sorted by score) →
+JSON result.
 
 **`rag_context`** — `question` → `Engine.Ask` → retrieve passages → build
 nonce-tagged context block → `client.Chat` (SSE to the LLM endpoint, buffered)

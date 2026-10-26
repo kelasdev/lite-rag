@@ -9,6 +9,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **Hybrid retrieval (vector + keyword).** Vector-only retrieval lost to its own
+  corpus: on ~10 000 chunks of mixed security notes, queries about jailbreaking
+  scored 0.66–0.70 against generic bug-bounty text, while
+  `Jailbreaking-Master-Guide` ranked 6th–19th and never reached the LLM with
+  `top_k = 5` — the relevance judge then answered "the documents do not contain
+  information". Retrieval now also searches file paths, headings, and content
+  for query terms (`database.LexicalChunks`, same SQL that returns the cosine)
+  and fuses both signals: `score = cos + lexical_weight*lex*(1-cos)`, with a
+  path match worth 0.8, heading 0.6, content 0.25. A chunk is admitted when
+  `cos >= min_score` or `lex >= lexical_min`, so an exact path match survives
+  even below the cosine gate. Keyword search failure degrades to vector-only.
+  Config: `retrieval.hybrid`, `candidate_k`, `lexical_weight`, `lexical_min`.
+  Tests: scoring/escaping/model-filtering in `internal/database`, fusion and
+  fallback behaviour in `internal/retriever`.
+
 ### Fixed
 
 - **CLI and MCP no longer fight over the DuckDB file lock.** DuckDB lets one

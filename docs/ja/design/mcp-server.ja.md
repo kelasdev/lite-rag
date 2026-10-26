@@ -135,8 +135,8 @@ Engine はリクエストごとの可変状態を持たない — `retriever` �
 
 ## 6. データフロー
 
-**`search_docs`** — `query` → `Engine.Search` → embed → `SimilarChunks` →
-コンテキスト展開 → パッセージ（スコア降順） → JSON 結果。
+**`search_docs`** — `query` → `Engine.Search` → embed → ベクター候補とキーワード
+候補を融合（§3.3.3）→ コンテキスト展開 → パッセージ（スコア降順） → JSON 結果。
 
 **`rag_context`** — `question` → `Engine.Ask` → パッセージ検索 → nonce タグ付き
 コンテキストブロック構築 → `client.Chat`（LLM エンドポイントへの SSE は内部・バッファ）
