@@ -10,7 +10,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"lite-rag/internal/database"
 	"lite-rag/internal/llm"
 	"lite-rag/internal/rag"
 	"lite-rag/internal/retriever"
@@ -38,7 +37,7 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	db, err := database.Open(cfg.Database.Path)
+	db, err := openBusyDB(cfg)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}

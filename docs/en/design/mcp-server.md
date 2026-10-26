@@ -146,8 +146,11 @@ nonce-tagged context block → `client.Chat` (SSE to the LLM endpoint, buffered)
 
 **`index_documents`** — `path` → `Ingester.IndexPath` (adapter over
 `internal/indexer`, dispatches file vs directory) → before/after
-`db.ListDocuments()` count → JSON result. Runs in the MCP process, sharing
-its single DuckDB connection — no lock conflict with concurrent tool calls.
+`db.ListDocuments()` count → JSON result. Runs in the MCP process, sharing its
+DuckDB handle with concurrent tool calls. That handle is released after
+`database.idle_timeout_ms` of inactivity, so a CLI `index` can take the file
+lock while the server is idle; the server reopens — and sees the new
+documents — on its next request. See architecture §3.7 "Cross-process access".
 
 ---
 

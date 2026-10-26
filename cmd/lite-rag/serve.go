@@ -7,7 +7,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"lite-rag/internal/database"
 	"lite-rag/internal/llm"
 	"lite-rag/internal/server"
 )
@@ -44,7 +43,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		addr = serveAddr
 	}
 
-	db, err := database.Open(cfg.Database.Path)
+	db, err := openBusyDB(cfg)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}

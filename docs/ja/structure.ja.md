@@ -17,7 +17,7 @@ lite-rag/
 │   ├── config/
 │   │   └── config.go        # TOML + 環境変数による設定読み込み
 │   ├── database/
-│   │   ├── db.go            # DuckDB 接続・スキーママイグレーション・ドキュメント管理
+│   │   ├── db.go            # DuckDB 接続・ロック調整（アイドル解放・待機）・スキーママイグレーション
 │   │   └── documents.go     # DocumentRow/ChunkRow 型・CRUD・ベクター検索メソッド
 │   ├── normalizer/
 │   │   └── normalizer.go    # Unicode NFKC 正規化；Markdown 除去；

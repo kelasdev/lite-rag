@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"lite-rag/internal/config"
+	"lite-rag/internal/database"
 )
 
 var (
@@ -35,6 +36,29 @@ func loadConfig() (*config.Config, error) {
 		cfg.Database.Path = dbOverride
 	}
 	return cfg, nil
+}
+
+// openBusyDB opens the database for a process that keeps running after its
+// database work is done (mcp, serve, ask). DuckDB allows one process to hold
+// the file lock, so these open with an idle timeout: the handle — and with it
+// the lock — is released once the process stops touching the database, which
+// lets CLI commands run against the same file. The next database call
+// reopens it transparently.
+func openBusyDB(cfg *config.Config) (*database.DB, error) {
+	return database.OpenWithOptions(cfg.Database.Path, database.Options{
+		IdleTimeout: cfg.Database.IdleTimeout(),
+		LockTimeout: cfg.Database.LockTimeout(),
+	})
+}
+
+// openCommandDB opens the database for a one-shot command (index, reindex,
+// docs). The handle stays open for the command's lifetime, and opening waits
+// database.lock_timeout_ms for a resident process to release the lock instead
+// of failing immediately.
+func openCommandDB(cfg *config.Config) (*database.DB, error) {
+	return database.OpenWithOptions(cfg.Database.Path, database.Options{
+		LockTimeout: cfg.Database.LockTimeout(),
+	})
 }
 
 func main() {

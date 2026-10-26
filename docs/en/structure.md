@@ -17,7 +17,7 @@ lite-rag/
 │   ├── config/
 │   │   └── config.go        # TOML + env-var configuration loading
 │   ├── database/
-│   │   ├── db.go            # DuckDB connection, schema migration, document management
+│   │   ├── db.go            # DuckDB connection + lock coordination (idle release, wait), schema migration
 │   │   └── documents.go     # DocumentRow/ChunkRow types; CRUD, vector search methods
 │   ├── normalizer/
 │   │   └── normalizer.go    # Unicode NFKC normalization; Markdown stripping;

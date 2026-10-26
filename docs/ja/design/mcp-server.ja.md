@@ -146,8 +146,11 @@ Engine はリクエストごとの可変状態を持たない — `retriever` �
 
 **`index_documents`** — `path` → `Ingester.IndexPath`（`internal/indexer`
 のアダプタ、ファイル/ディレクトリを自動判定）→ `db.ListDocuments()` の
-前後カウント → JSON 結果。MCP プロセス内で実行され、同一の DuckDB
-接続を共有するため、ツール呼出とのロック競合は発生しない。
+前後カウント → JSON 結果。MCP プロセス内で実行され、同時ツール呼出と DuckDB
+ハンドルを共有する。このハンドルは `database.idle_timeout_ms` の間アクセスが
+ないと解放されるため、サーバーがアイドル中なら CLI の `index` がファイルロックを
+取得できる。サーバーは次のリクエストで再オープンし、新しいドキュメントも認識する。
+architecture §3.7「プロセス間アクセス」を参照。
 
 ---
 

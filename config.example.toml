@@ -36,6 +36,19 @@ chat      = "openai/gpt-oss-20b"
 # Environment variable: LITE_RAG_DB_PATH
 path = "./lite-rag.db"
 
+# How long a resident process (mcp, serve, ask) keeps its DuckDB handle open
+# while idle before releasing the file lock. DuckDB lets only one process hold
+# the file, so releasing the handle after a quiet period allows CLI commands
+# (index, docs, ask) to use the same database without a lock conflict.
+# 0 = keep the handle for the process lifetime (blocks the CLI).
+# Environment variable: LITE_RAG_DB_IDLE_TIMEOUT_MS
+idle_timeout_ms = 500
+
+# How long any command waits for another process to release the lock before
+# failing with an explanatory error.
+# Environment variable: LITE_RAG_DB_LOCK_TIMEOUT_MS
+lock_timeout_ms = 10000
+
 [retrieval]
 # Number of vector search hits to retrieve per query.
 top_k = 5

@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -63,9 +65,33 @@ type ModelsConfig struct {
 	Chat      string `toml:"chat"`
 }
 
-// DatabaseConfig specifies the DuckDB file path.
+// DatabaseConfig specifies the DuckDB file path and how competing processes
+// share it. DuckDB allows a single process to hold the file lock, so a
+// resident process (mcp, serve) releases it while idle and every open waits
+// for the lock instead of failing.
 type DatabaseConfig struct {
 	Path string `toml:"path"`
+
+	// IdleTimeoutMS is how long mcp/serve keep the DuckDB handle open while
+	// idle before releasing the file lock. 0 disables releasing (the handle
+	// stays open for the process lifetime).
+	IdleTimeoutMS int `toml:"idle_timeout_ms"`
+
+	// LockTimeoutMS is how long any command waits for another process to
+	// release the lock before failing with an explanatory error.
+	LockTimeoutMS int `toml:"lock_timeout_ms"`
+}
+
+// IdleTimeout returns the idle period after which a resident process releases
+// the DuckDB handle; 0 means never.
+func (d DatabaseConfig) IdleTimeout() time.Duration {
+	return time.Duration(d.IdleTimeoutMS) * time.Millisecond
+}
+
+// LockTimeout returns how long an open waits for the database lock; 0 lets
+// the database layer apply its default.
+func (d DatabaseConfig) LockTimeout() time.Duration {
+	return time.Duration(d.LockTimeoutMS) * time.Millisecond
 }
 
 // RetrievalConfig controls chunking and retrieval behaviour.
@@ -90,7 +116,9 @@ func defaults() Config {
 			Chat:      "openai/gpt-oss-20b",
 		},
 		Database: DatabaseConfig{
-			Path: "./lite-rag.db",
+			Path:          "./lite-rag.db",
+			IdleTimeoutMS: 500,
+			LockTimeoutMS: 10000,
 		},
 		Retrieval: RetrievalConfig{
 			TopK:          5,
@@ -175,5 +203,15 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("LITE_RAG_DB_PATH"); v != "" {
 		cfg.Database.Path = v
+	}
+	if v := os.Getenv("LITE_RAG_DB_IDLE_TIMEOUT_MS"); v != "" {
+		if ms, err := strconv.Atoi(v); err == nil && ms >= 0 {
+			cfg.Database.IdleTimeoutMS = ms
+		}
+	}
+	if v := os.Getenv("LITE_RAG_DB_LOCK_TIMEOUT_MS"); v != "" {
+		if ms, err := strconv.Atoi(v); err == nil && ms >= 0 {
+			cfg.Database.LockTimeoutMS = ms
+		}
 	}
 }

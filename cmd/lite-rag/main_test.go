@@ -27,6 +27,8 @@ chat      = "test-chat"
 
 [database]
 path = %q
+idle_timeout_ms = 100
+lock_timeout_ms = 10000
 
 [retrieval]
 top_k          = 3

@@ -11,6 +11,20 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **CLI and MCP no longer fight over the DuckDB file lock.** DuckDB lets one
+  process hold a database file, so a running `mcp` or `serve` made every CLI
+  command fail with `IO Error: Could not set lock on file ... Conflicting lock
+  is held`. `database.DB` now opens with an idle timeout: `mcp`, `serve` and
+  `ask` release the handle (and the lock) after `database.idle_timeout_ms`
+  (default 500 ms) without database activity and reopen transparently on the
+  next call. Every open retries with jittered backoff for up to
+  `database.lock_timeout_ms` (default 10 s) before failing with a
+  `LockError` that names the path, the wait and the holding process. A
+  resident server also stops serving a stale startup snapshot: documents
+  indexed by the CLI become visible on its next request.
+  Config: `idle_timeout_ms`, `lock_timeout_ms` (env
+  `LITE_RAG_DB_IDLE_TIMEOUT_MS`, `LITE_RAG_DB_LOCK_TIMEOUT_MS`).
+
 - **`make verify-release` now fails closed.** Its last block chained unzip, the
   packaged binary's `--version` and `spctl` with `&&` and ended the whole chain
   in `|| true`, so a zip that did not unpack or a binary that did not run exited

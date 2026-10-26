@@ -81,6 +81,8 @@ chat      = "openai/gpt-oss-20b"
 
 [database]
 path = "./lite-rag.db"
+idle_timeout_ms = 500    # mcp/serve はこのアイドル時間後にファイルロックを解放
+lock_timeout_ms = 10000  # 他コマンドはロック解放をこの時間まで待つ
 
 [retrieval]
 top_k          = 5     # ベクトル検索のヒット件数
@@ -105,6 +107,8 @@ log_level = "info"             # info | debug | warn | error
 | `LITE_RAG_EMBEDDING_MODEL` | `models.embedding` |
 | `LITE_RAG_CHAT_MODEL` | `models.chat` |
 | `LITE_RAG_DB_PATH` | `database.path` |
+| `LITE_RAG_DB_IDLE_TIMEOUT_MS` | `database.idle_timeout_ms` |
+| `LITE_RAG_DB_LOCK_TIMEOUT_MS` | `database.lock_timeout_ms` |
 
 チャットと埋め込みを**異なるサーバー**に配置できます。`api.embed_url`
 （および任意の `api.embed_api_key`）を設定すると `/embeddings` だけが別

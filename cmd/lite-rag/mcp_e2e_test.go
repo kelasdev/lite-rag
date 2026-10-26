@@ -210,6 +210,85 @@ func TestMCPCmd_E2E_Ingest(t *testing.T) {
 	}
 }
 
+// TestMCPCmd_E2E_CLIConcurrency reproduces the cross-process lock conflict:
+// an MCP server keeps running while CLI commands open the same database. Both
+// must work — the CLI must not fail with "Could not set lock", and the MCP
+// server must see documents the CLI indexed after it started.
+func TestMCPCmd_E2E_CLIConcurrency(t *testing.T) {
+	srv := mockLLM(t)
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	cfg := writeCfg(t, dir, srv.URL, dbPath)
+
+	docDirA := t.TempDir()
+	if err := os.WriteFile(filepath.Join(docDirA, "alpha.md"),
+		[]byte("# Alpha\n\nAlpha covers widgets.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run("--config", cfg, "index", "--dir", docDirA); err != nil {
+		t.Fatalf("index alpha: %v", err)
+	}
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "e2e-client"}, nil)
+	transport := &mcp.CommandTransport{
+		Command: exec.Command(e2eBinary, "--config", cfg, "mcp"),
+	}
+	ctx := context.Background()
+	session, err := client.Connect(ctx, transport, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer session.Close()
+
+	// The MCP server touches the database, so its handle is open right now.
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "list_documents",
+		Arguments: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("list_documents: %v", err)
+	}
+	if !strings.Contains(e2eText(t, res), "alpha.md") {
+		t.Fatalf("list_documents must list alpha.md, got: %s", e2eText(t, res))
+	}
+
+	// CLI read: must wait for the MCP handle to go idle, not fail on the lock.
+	out, err := exec.Command(e2eBinary, "--config", cfg, "docs", "list").CombinedOutput()
+	if err != nil {
+		t.Fatalf("CLI docs list while MCP is running: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "alpha.md") {
+		t.Errorf("CLI docs list must list alpha.md, got: %s", out)
+	}
+
+	// CLI write: must also get the lock, index a new document, and release it.
+	docDirB := t.TempDir()
+	if err := os.WriteFile(filepath.Join(docDirB, "beta.md"),
+		[]byte("# Beta\n\nBeta describes gizmo calibration.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err = exec.Command(e2eBinary, "--config", cfg, "index", "--dir", docDirB).CombinedOutput()
+	if err != nil {
+		t.Fatalf("CLI index while MCP is running: %v\n%s", err, out)
+	}
+
+	// The MCP server must see the document indexed after it started: its idle
+	// handle reopens instead of serving a stale snapshot.
+	res, err = session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "search_docs",
+		Arguments: map[string]any{"query": "gizmo calibration"},
+	})
+	if err != nil {
+		t.Fatalf("search_docs: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("search_docs error: %s", e2eText(t, res))
+	}
+	if !strings.Contains(e2eText(t, res), "gizmo calibration") {
+		t.Errorf("search_docs must find beta.md indexed by the CLI, got: %s", e2eText(t, res))
+	}
+}
+
 func e2eText(t *testing.T, res *mcp.CallToolResult) string {
 	t.Helper()
 	if res == nil || len(res.Content) == 0 {

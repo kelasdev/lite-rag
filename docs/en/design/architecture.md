@@ -64,6 +64,8 @@ chat         = "openai/gpt-oss-20b"
 
 [database]
 path         = "./lite-rag.db"
+idle_timeout_ms = 500     # mcp/serve release the file lock when idle
+lock_timeout_ms = 10000   # how long an open waits for the lock
 
 [retrieval]
 top_k           = 5    # number of vector search hits
@@ -325,6 +327,41 @@ LIMIT  ?
 
 After finding the top-K hits, the Retriever fetches adjacent chunks for each hit
 and merges overlapping spans before returning passages to the caller (§3.3.1).
+
+#### Cross-process access
+
+DuckDB allows **one process at a time** to hold a database file; every other
+process — even a read-only one — fails with
+`IO Error: Could not set lock on file`. A resident `mcp` or `serve` process
+would therefore block the CLI for its whole lifetime, and two MCP clients
+(an editor and an agent, say) would fight over the same file.
+
+`database.DB` addresses this on both sides:
+
+| Concern | Behaviour |
+|---------|-----------|
+| Resident process keeps the lock | With `Options.IdleTimeout` set, the handle closes once the process has been idle for that long and reopens transparently on the next call. Default `500 ms` via `database.idle_timeout_ms`. |
+| Short-lived command finds the file locked | Every open retries with jittered exponential backoff (25 ms → 500 ms) for up to `Options.LockTimeout` (default `10 s`, `database.lock_timeout_ms`) instead of failing on the first attempt. |
+| Lock still held after the wait | `*database.LockError` wraps `database.ErrLocked`, names the path, the wait and the holder PID from DuckDB's message, and tells the user to stop the other process or raise the timeout. |
+| Writer needs the file exclusively | Write commands (`index`, `reindex`, `docs delete`) hold the handle for the command's lifetime — they are short-lived by nature, and releasing mid-index would let a server grab the lock between files. |
+| In-memory database (`path = ""`) | Idle release is disabled: its contents would vanish with the handle. |
+
+```toml
+[database]
+path = "./lite-rag.db"
+
+# How long mcp/serve keep the DuckDB handle open while idle before releasing
+# the file lock. 0 = keep it for the process lifetime (blocks the CLI).
+idle_timeout_ms = 500
+
+# How long any command waits for another process to release the lock.
+lock_timeout_ms = 10000
+```
+
+Reopening also removes an older failure mode: a resident server used to serve
+the snapshot it opened at startup, so documents indexed by a CLI run were
+invisible to it until restart. With an idle-released handle it sees them on the
+next request.
 
 ---
 

@@ -58,7 +58,7 @@ func runMCP(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	db, err := database.Open(cfg.Database.Path)
+	db, err := openBusyDB(cfg)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
@@ -66,8 +66,9 @@ func runMCP(cmd *cobra.Command, args []string) error {
 
 	client := llm.NewSplit(cfg.API.BaseURL, cfg.API.EffectiveEmbedURL(), cfg.API.APIKey, cfg.API.EffectiveEmbedAPIKey(), cfg.Models.Embedding, cfg.Models.Chat)
 
-	// The Web UI shares this process's single DuckDB connection with the
-	// MCP tools, so there is no lock conflict between them.
+	// The Web UI shares this process's DuckDB handle with the MCP tools, so
+	// there is no lock conflict between them; the handle is released when the
+	// whole process is idle, letting CLI commands use the same database.
 	if mcpWeb {
 		if err := startWeb(cfg, db, client); err != nil {
 			return err

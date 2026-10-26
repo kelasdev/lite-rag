@@ -6,7 +6,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"lite-rag/internal/database"
 	"lite-rag/internal/indexer"
 	"lite-rag/internal/llm"
 )
@@ -34,7 +33,7 @@ func runReindex(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	db, err := database.Open(cfg.Database.Path)
+	db, err := openCommandDB(cfg)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}

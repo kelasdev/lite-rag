@@ -36,7 +36,13 @@ type ScoredChunk struct {
 // FindDocumentByPath returns the ID, file hash, and embedding model for the
 // document with the given file path. Returns ("", "", "", nil) if not found.
 func (db *DB) FindDocumentByPath(filePath string) (id, hash, model string, err error) {
-	row := db.conn.QueryRow(
+	conn, err := db.acquire()
+	if err != nil {
+		return "", "", "", err
+	}
+	defer db.release()
+
+	row := conn.QueryRow(
 		"SELECT id, file_hash, embedding_model FROM documents WHERE file_path = ?", filePath)
 	err = row.Scan(&id, &hash, &model)
 	if err == sql.ErrNoRows {
@@ -48,7 +54,13 @@ func (db *DB) FindDocumentByPath(filePath string) (id, hash, model string, err e
 // ReplaceDocument atomically replaces a document and all its chunks.
 // If a document with the same file_path already exists it is removed first.
 func (db *DB) ReplaceDocument(doc DocumentRow, chunks []ChunkRow) error {
-	tx, err := db.conn.Begin()
+	conn, err := db.acquire()
+	if err != nil {
+		return err
+	}
+	defer db.release()
+
+	tx, err := conn.Begin()
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
@@ -99,7 +111,13 @@ func (db *DB) ReplaceDocument(doc DocumentRow, chunks []ChunkRow) error {
 // query vector, filtered to documents indexed with the given embeddingModel.
 // Computed inside DuckDB using list_cosine_similarity.
 func (db *DB) SimilarChunks(query []float32, topK int, embeddingModel string) ([]ScoredChunk, error) {
-	rows, err := db.conn.Query(
+	conn, err := db.acquire()
+	if err != nil {
+		return nil, err
+	}
+	defer db.release()
+
+	rows, err := conn.Query(
 		`SELECT c.id, c.document_id, c.chunk_index, c.heading_path, c.content,
 		        list_cosine_similarity(c.embedding, ?) AS score,
 		        d.file_path
@@ -131,7 +149,13 @@ func (db *DB) SimilarChunks(query []float32, topK int, embeddingModel string) ([
 // AdjacentChunks returns the chunks of documentID whose chunk_index is in
 // [lo, hi], ordered by chunk_index. Used for context window expansion.
 func (db *DB) AdjacentChunks(documentID string, lo, hi int) ([]ChunkRow, error) {
-	rows, err := db.conn.Query(
+	conn, err := db.acquire()
+	if err != nil {
+		return nil, err
+	}
+	defer db.release()
+
+	rows, err := conn.Query(
 		`SELECT id, document_id, chunk_index, heading_path, content
 		 FROM chunks
 		 WHERE document_id = ?

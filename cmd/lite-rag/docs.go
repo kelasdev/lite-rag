@@ -50,7 +50,7 @@ func openDB() (*database.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
-	return database.Open(cfg.Database.Path)
+	return openCommandDB(cfg)
 }
 
 func runDocsList(_ *cobra.Command, _ []string) error {

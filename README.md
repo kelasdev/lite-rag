@@ -89,6 +89,8 @@ chat      = "openai/gpt-oss-20b"
 
 [database]
 path = "./lite-rag.db"
+idle_timeout_ms = 500    # mcp/serve release the file lock after this idle time
+lock_timeout_ms = 10000  # other commands wait this long for the lock
 
 [retrieval]
 top_k          = 5     # vector search hits
@@ -113,6 +115,8 @@ Environment variables override file settings:
 | `LITE_RAG_EMBEDDING_MODEL` | `models.embedding` |
 | `LITE_RAG_CHAT_MODEL` | `models.chat` |
 | `LITE_RAG_DB_PATH` | `database.path` |
+| `LITE_RAG_DB_IDLE_TIMEOUT_MS` | `database.idle_timeout_ms` |
+| `LITE_RAG_DB_LOCK_TIMEOUT_MS` | `database.lock_timeout_ms` |
 
 Chat and embeddings can live on **different servers**. Set `api.embed_url`
 (and optionally `api.embed_api_key`) to route `/embeddings` to a separate

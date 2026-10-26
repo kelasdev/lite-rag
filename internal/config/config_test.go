@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"lite-rag/internal/config"
 )
@@ -100,6 +101,35 @@ func TestEnvOverride_DBPath(t *testing.T) {
 	}
 	if cfg.Database.Path != "/tmp/custom.db" {
 		t.Errorf("Database.Path = %q, want env override", cfg.Database.Path)
+	}
+}
+
+func TestDatabaseAccessDefaults(t *testing.T) {
+	cfg, err := config.Load("/nonexistent/config.toml")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.Database.IdleTimeout(); got != 500*time.Millisecond {
+		t.Errorf("IdleTimeout() = %v, want 500ms", got)
+	}
+	if got := cfg.Database.LockTimeout(); got != 10*time.Second {
+		t.Errorf("LockTimeout() = %v, want 10s", got)
+	}
+}
+
+func TestDatabaseAccessEnvOverride(t *testing.T) {
+	t.Setenv("LITE_RAG_DB_IDLE_TIMEOUT_MS", "0")
+	t.Setenv("LITE_RAG_DB_LOCK_TIMEOUT_MS", "2500")
+
+	cfg, err := config.Load("/nonexistent/config.toml")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.Database.IdleTimeout(); got != 0 {
+		t.Errorf("IdleTimeout() = %v, want 0 (disabled)", got)
+	}
+	if got := cfg.Database.LockTimeout(); got != 2500*time.Millisecond {
+		t.Errorf("LockTimeout() = %v, want 2.5s", got)
 	}
 }
 
